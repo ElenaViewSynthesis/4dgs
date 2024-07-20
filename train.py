@@ -8,7 +8,11 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+''' [ITER 14000] Evaluating test: L1 0.0191509898423272 PSNR 30.95304646211512 [20/07 12:07:58]  1h2m
 
+[ITER 14000] Evaluating train: L1 0.006019245340105365 PSNR 39.56764243630802 [20/07 12:07:59]
+
+'''
 
 """
 Number of points at initialisation : 96466 
