@@ -73,8 +73,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     multithread_write(render_list, render_path)
 
+    ''' 82 FPS at an 800 x 800 resolution for synthetic data.
+        30 fps at an 1352 x 1014 resoltion for real datasets.
     
-    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30)
+    '''
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=36)  #10,   30 default, 73 (paper)
 def render_sets(dataset : ModelParams, hyperparam, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)

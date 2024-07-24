@@ -11,8 +11,6 @@
 
 from pathlib import Path
 import os
-import logging
-from pathlib import Path
 from PIL import Image
 import torch
 import torchvision.transforms.functional as tf
@@ -23,12 +21,6 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
 from pytorch_msssim import ms_ssim
-
-
-# Configure logging for the metrics of experiments on each instance type of datasets.
-logging.basicConfig(filename='metrics.log', level=logging.INFO, format='%(asctime)s %(message)s')
-
-
 def readImages(renders_dir, gt_dir):
     renders = []
     gts = []
@@ -41,7 +33,6 @@ def readImages(renders_dir, gt_dir):
         image_names.append(fname)
     return renders, gts, image_names
 
-
 def evaluate(model_paths):
 
     full_dict = {}
@@ -49,11 +40,9 @@ def evaluate(model_paths):
     full_dict_polytopeonly = {}
     per_view_dict_polytopeonly = {}
     print("")
-    logging.info("Starting Evaluation")
 
     for scene_dir in model_paths:
         try:
-            logging.info(f"Scene: {scene_dir}")
             print("Scene:", scene_dir)
             full_dict[scene_dir] = {}
             per_view_dict[scene_dir] = {}
@@ -63,7 +52,6 @@ def evaluate(model_paths):
             test_dir = Path(scene_dir) / "test"
 
             for method in os.listdir(test_dir):
-                logging.info(f"Method: {method}")
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
@@ -120,7 +108,7 @@ def evaluate(model_paths):
             with open(scene_dir + "/per_view.json", 'w') as fp:
                 json.dump(per_view_dict[scene_dir], fp, indent=True)
         except Exception as e:
-            logging.error(f"Unable to compute metrics for model {scene_dir}")
+            
             print("Unable to compute metrics for model", scene_dir)
             raise e
 
