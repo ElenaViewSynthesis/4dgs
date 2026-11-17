@@ -10,8 +10,10 @@ The original 4DGaussians README is kept unchanged as [`README_4DGaussians.md`](R
 > **Status, 17 November 2026.** The regulariser is implemented and unit-tested. Depth priors exist for
 > both scenes. **No regularised experiment has been run.** The check that the baseline is unchanged
 > when every new flag is off (B0) has been run 23 times and **does not pass as worded: the unmodified
-> baseline itself is unstable on *americano*** (section 10). The dense check says the priors are
-> affine in depth (section 7). Nothing in this file is a claim that the regulariser helps.
+> baseline itself is unstable on *americano*** (section 10). Its crashes are not memory exhaustion.
+> The dense check says the priors are affine in depth (section 7). One unregularised run and one
+> ChronoDepth video exist for the DyNeRF scene *coffee martini* (section 10). Nothing in this file is
+> a claim that the regulariser helps.
 
 ---
 
@@ -408,8 +410,7 @@ What the runs show:
 - **The crashes.** Three runs, one per arm, stopped with
   `CUDA error: CUBLAS_STATUS_EXECUTION_FAILED`. None of the logs contains an out-of-memory message,
   and two of the three crashed with 103,175 and 127,347 Gaussians, well below the count healthy runs
-  reach. The cause is not known. Five baseline runs with `CUDA_LAUNCH_BLOCKING=1` and external GPU
-  memory sampling (`remote/specs/b0_debug_blocking.json`) are running to locate it.
+  reach. The cause is not known; the debug runs below rule out memory.
 
 Consequences:
 
@@ -421,6 +422,57 @@ Consequences:
 - No regularised run has been started. With this instability, a 3-seed comparison (E2) cannot
   separate an effect of the regulariser from a collapsed seed, so the plan needs either more seeds
   per arm or the instability fixed first. That decision is open.
+
+### Debug runs: the crash is not memory exhaustion
+
+Five more runs of the unmodified baseline on *americano* with `CUDA_LAUNCH_BLOCKING=1`
+(`remote/specs/b0_debug_blocking.json`), with GPU and container memory sampled every 2 s from
+outside the training process. They train under a debugging setting and are kept out of the B0 counts
+above.
+
+| Run | Outcome | PSNR | SSIM | LPIPS-VGG | LPIPS-Alex | Final Gaussians | Peak GPU memory | Peak container memory |
+|---|---|---|---|---|---|---|---|---|
+| r1 | collapsed | 25.9478 | 0.8028 | 0.3040 | 0.1978 | 360,160 | 8,319 MiB | 17,639 MiB |
+| r2 | crashed at fine 1,520 | — | — | — | — | — | 6,349 MiB | 8,909 MiB |
+| r3 | healthy | 31.3597 | 0.9174 | 0.1370 | 0.0695 | 211,763 | 9,617 MiB | 16,971 MiB |
+| r4 | healthy | 31.3061 | 0.9171 | 0.1369 | 0.0695 | 216,036 | 11,395 MiB | 17,666 MiB |
+| r5 | degraded | 30.6445 | 0.9052 | 0.1695 | 0.0919 | 225,867 | 9,603 MiB | 17,752 MiB |
+
+- **Memory is ruled out.** No run used more than 11,395 MiB of the 40,960 MiB card, and the run that
+  crashed was the smallest of the five (121,994 Gaussians, training PSNR 28.66 dB just before).
+- **Where the crash is raised.** With blocking on, the error is still
+  `CUBLAS_STATUS_EXECUTION_FAILED`, raised inside `loss.backward()` at a `cublasSgemm` call, in
+  unmodified baseline code. Its root cause is not known, and neither is whether it shares a cause
+  with the collapse.
+- **The instability again.** Two of these five baseline runs are healthy. Over all 13 baseline runs
+  (8 normal, 5 blocking): 7 healthy, 2 degraded, 2 collapsed, 2 crashed.
+
+### DyNeRF check: *coffee martini*
+
+One multi-camera scene from the Neural 3D Video dataset, run to obtain a ChronoDepth video and the
+Gaussian splats of an unregularised model side by side in W&B. **The depth maps are not used in
+training**: the depth loss is wired up for the HyperNeRF loader only.
+
+| Stage | Result |
+|---|---|
+| Preprocessing (baseline steps: `preprocess_dynerf.py`, `colmap.sh <dir> llff`, `downsample_point.py`) | 18 cameras, 300 frames each; 318,712 fused points |
+| ChronoDepth on `cam00` (the held-out test view) | 300 frames, inference at 1024×768, output 1352×1014, F = 10, overlap 5, 5 denoising steps, seed 1234, 247 s |
+| Training, branch with every flag off, `arguments/dynerf/coffee_martini.py`, 14,000 iterations | one run, no NaN restart, no CUDA error |
+
+| PSNR | SSIM | MS-SSIM | D-SSIM | LPIPS-VGG | LPIPS-Alex | Final Gaussians | Test render FPS | Training time | Peak GPU memory |
+|---|---|---|---|---|---|---|---|---|---|
+| 28.5781 | 0.9075 | 0.9547 | 0.0227 | 0.1628 | 0.0817 | 124,147 | 9.98 | 3,827 s | 21,027 MiB |
+
+Test view `cam00` (300 frames); training on the other 17 cameras (5,100 images). Training-time test
+PSNR rose monotonically (27.51, 27.72, 28.25 dB at the three fine-stage evaluations), so this run
+shows no sign of the collapse seen on *americano*. It is a single run: nothing is known about its
+run-to-run spread, and it has not been compared with the unmodified baseline, which cannot load
+DyNeRF scenes at all (finding 10, section 12).
+
+In W&B: `chronodepth-prior/coffee_martini/cam00` holds the depth video and previews;
+`dynerf/coffee_martini_branch_flags_off` holds the splat statistics and point clouds (fine
+iterations 3,500, 7,000, 10,500 and 14,000). An empty failed run of the same name is the attempt
+that hit finding 10.
 
 ---
 
@@ -489,6 +541,7 @@ modal deploy remote/app.py                       # after every code change
 python remote/launch.py prep americano           # download + COLMAP + downsampling
 python remote/launch.py depth americano          # ChronoDepth
 python remote/launch.py runs remote/specs/b0.json
+python remote/launch.py dynerf coffee_martini cam00   # DyNeRF: prep, ChronoDepth on one camera, one run
 python remote/launch.py status
 python remote/launch.py collect results.csv
 ```
@@ -528,6 +581,11 @@ Verified in the code at `205090b`. None of these was changed, so that the baseli
 9. **Training is unstable on *americano* at the reference config.** Of eight runs of the unmodified
    code, one collapsed to 25.7 dB, one crashed with a CUDA error after collapsing and one finished
    0.8 dB low (section 10). Training is also not bit-reproducible under the default seeding.
+10. **No DyNeRF scene can be loaded.** `format_infos` in `scene/dataset_readers.py` (line 363) has a
+    debug print that reads `self` and `root_dir`, neither of which exists in that function, so every
+    DyNeRF scene stops with `NameError` before training. **This one line was removed in this code**
+    (deviation 9); it is the only change to baseline behaviour, and the HyperNeRF path used by every
+    other experiment does not execute it.
 
 ---
 
@@ -543,6 +601,8 @@ Verified in the code at `205090b`. None of these was changed, so that the baseli
 | 6 | A run with a depth term stops after 5 NaN restarts | The baseline's restart loop has no limit |
 | 7 | COLMAP 3.8 is built without its GUI in the remote image | Headless containers; the command-line tools are the same |
 | 8 | Remote training runs on an A100 (40 GB), not an RTX A6000 | Availability; timings are comparable only among runs of this project |
+| 9 | One debug print removed from the baseline's DyNeRF loader | Finding 10 above: with it, no DyNeRF scene loads. HyperNeRF runs are unaffected |
+| 10 | For DyNeRF scenes ChronoDepth is run on one camera only and the maps are not read by the loader | The request was a depth video beside the splats; depth supervision for multi-camera scenes is not implemented |
 
 ---
 
