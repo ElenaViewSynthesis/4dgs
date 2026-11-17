@@ -9,3 +9,6 @@ screenshots
 data/
 data
 submodules/
+
+# local credentials
+.env

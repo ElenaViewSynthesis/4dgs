@@ -47,6 +47,10 @@ import lpips
 from utils.scene_utils import render_training_image
 from time import time
 import copy
+import json
+from arguments import DepthParams
+from utils import depth_loss as dl
+from utils.run_logging import RunLogger, MAX_NAN_RESTARTS
 
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
@@ -57,8 +61,16 @@ except ImportError:
     TENSORBOARD_FOUND = False
 def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations, 
                          checkpoint_iterations, checkpoint, debug_from,
-                         gaussians, scene, stage, tb_writer, train_iter,timer):
+                         gaussians, scene, stage, tb_writer, train_iter,timer, dp=None, run=None):
     first_iter = 0
+    # ---- video-depth regulariser (all off by default) ----
+    depth_on = dp is not None and dp.depth_loss != "none" and (dp.lambda_depth > 0 or dp.lambda_depth_end > 0)
+    temp_on = dp is not None and dp.lambda_temp > 0 and stage == "fine"
+    need_aux = depth_on or temp_on
+    if temp_on and opt.dataloader:
+        raise NotImplementedError("L_temp pair sampling is not implemented for the dataloader branch")
+    k_total = opt.coarse_iterations + opt.iterations
+    k_offset = opt.coarse_iterations if stage == "fine" else 0
 
     gaussians.training_setup(opt)
     if checkpoint:
@@ -174,6 +186,13 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         else:
             idx = 0
             viewpoint_cams = []
+            if temp_on:
+                # pair sampling for L_temp: two consecutive training frames (t, t+1)
+                # rendered in the same iteration; replaces the random batch.
+                for _ in range(max(batch_size // 2, 1)):
+                    pair_start = randint(0, len(temp_list) - 2)
+                    viewpoint_cams += [temp_list[pair_start], temp_list[pair_start + 1]]
+                idx = batch_size
 
             while idx < batch_size :    
                     
@@ -194,8 +213,13 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         radii_list = []
         visibility_filter_list = []
         viewspace_point_tensor_list = []
+        aux_depths, aux_alphas, aux_priors = [], [], []
         for viewpoint_cam in viewpoint_cams:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, stage=stage,cam_type=scene.dataset_type)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, stage=stage,cam_type=scene.dataset_type, return_depth_alpha=need_aux)
+            if need_aux:
+                aux_depths.append(render_pkg["depth_diff"])
+                aux_alphas.append(render_pkg["alpha"])
+                aux_priors.append(viewpoint_cam.depth.cuda())
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
             images.append(image.unsqueeze(0))
             if scene.dataset_type!="PanopticSports":
@@ -221,6 +245,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         # norm
         
 
+        l1_value = Ll1.item()
         loss = Ll1
         if stage == "fine" and hyper.time_smoothness_weight != 0:
             # tv_loss = 0
@@ -233,9 +258,67 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         #     lpipsloss = lpips_loss(image_tensor,gt_image_tensor,lpips_model)
         #     loss += opt.lambda_lpips * lpipsloss
         
+        depth_row = {}
+        if need_aux:
+            # Eq. (full): L = L_base + lambda_d(k) L_depth + lambda_t L_temp
+            lam_d = dl.lambda_schedule(dp.lambda_depth_schedule, dp.lambda_depth, dp.lambda_depth_end,
+                                       k_offset + iteration, k_total) if depth_on else 0.0
+            targets = [dl.render_target(d, a, run.prior_space) for d, a in zip(aux_depths, aux_alphas)]
+            masks = [dl.omega_mask(a, dp.omega_thresh, p, t) for a, p, t in zip(aux_alphas, aux_priors, targets)]
+            n_frames = len(targets)
+            if dp.align == "per_camera":
+                # one (s, b) per camera from running statistics; HyperNeRF has a single camera (key 0)
+                for p, t, m in zip(aux_priors, targets, masks):
+                    run.aligner.update(0, p, t, m)
+                fits = [run.aligner.solve(0)] * n_frames
+            else:
+                fits = [dl.align_per_frame(p, t, m) for p, t, m in zip(aux_priors, targets, masks)]
+
+            depth_term = dl._zero(*targets)
+            if depth_on:
+                if dp.depth_loss == "l1_aligned":
+                    terms = [dl.depth_l1_loss(p, t, m, f[0], f[1]) if f[2] else dl._zero(t)
+                             for p, t, m, f in zip(aux_priors, targets, masks, fits)]
+                else:
+                    terms = [dl.pearson_loss(p, t, m, run.prior_sign)
+                             for p, t, m in zip(aux_priors, targets, masks)]
+                depth_term = sum(terms) / n_frames
+
+            temp_term = dl._zero(*targets)
+            if temp_on:
+                terms = []
+                for j in range(0, n_frames - 1, 2):
+                    if dp.align == "per_camera":
+                        s_pair, ok_pair = fits[j][0], fits[j][2]
+                    else:
+                        # per-frame ablation: one scale fitted jointly on the two frames of the pair
+                        pair_stats = (dl.sufficient_stats(aux_priors[j], targets[j], masks[j])
+                                      + dl.sufficient_stats(aux_priors[j + 1], targets[j + 1], masks[j + 1])).cpu()
+                        s_pair, _, ok_pair = dl.solve_affine(pair_stats)
+                    terms.append(dl.temporal_loss(aux_priors[j], aux_priors[j + 1], targets[j], targets[j + 1],
+                                                  masks[j], masks[j + 1], s_pair) if ok_pair else dl._zero(targets[j]))
+                temp_term = sum(terms) / max(len(terms), 1)
+
+            extra = lam_d * depth_term + dp.lambda_temp * temp_term
+            if torch.isfinite(extra):
+                loss = loss + extra
+            else:
+                run.logger.depth_nonfinite_skips += 1
+            depth_row = {"depth_unweighted": depth_term.item(), "depth_weighted": lam_d * depth_term.item(),
+                         "lambda_depth": lam_d,
+                         "temp_unweighted": temp_term.item(), "temp_weighted": dp.lambda_temp * temp_term.item(),
+                         "lambda_temp": dp.lambda_temp if temp_on else 0.0,
+                         "s": fits[0][0], "b": fits[0][1], "align_ok": int(fits[0][2]),
+                         "omega_frac": sum(m.float().mean().item() for m in masks) / n_frames}
+
         loss.backward()
         if torch.isnan(loss).any():
             print("loss is nan,end training, reexecv program now.")
+            if run is not None:
+                n_restart = run.logger.count_nan_restart()
+                os.environ["FDGS_NAN_REEXEC"] = "1"
+                if need_aux and n_restart > MAX_NAN_RESTARTS:
+                    raise RuntimeError("NaN loss persisted after {} restarts; giving up.".format(MAX_NAN_RESTARTS))
             os.execv(sys.executable, [sys.executable] + sys.argv)
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)
         for idx in range(0, len(viewspace_point_tensor_list)):
@@ -258,6 +341,20 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, [pipe, background], stage, scene.dataset_type)
+            if run is not None:
+                row = {"iteration": iteration, "stage": stage, "l1": l1_value, "loss_total": loss.item(),
+                       "gaussians": total_point, "iter_time_ms": iter_start.elapsed_time(iter_end)}
+                row.update(depth_row)
+                run.logger.log_iteration(row)
+                if run.logger.wandb_active and (iteration % 500 == 0 or iteration == 1):
+                    run.logger.log_gaussians(gaussians, stage, iteration,
+                                             with_cloud=(iteration == train_iter or iteration % 3500 == 0))
+                if need_aux and run.logger.wandb_active and (iteration % 1000 == 0 or iteration == 1):
+                    run.logger.log_depth_panel(stage + "/depth_panel",
+                                               viewpoint_cams[0].original_image.permute(1, 2, 0).cpu().numpy(),
+                                               targets[0].detach().cpu().numpy(),
+                                               (fits[0][0] * aux_priors[0] + fits[0][1]).cpu().numpy(),
+                                               masks[0].cpu().numpy(), "{} iteration {}".format(stage, iteration))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration, stage)
@@ -311,20 +408,104 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" +f"_{stage}_" + str(iteration) + ".pth")
-def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, expname):
+class RunState:
+    pass
+
+def setup_run(dataset, opt, dp):
+    """Provenance, logging and depth-prior bookkeeping for one run."""
+    run = RunState()
+    run.logger = RunLogger(args.model_path, os.path.dirname(os.path.abspath(__file__)))
+    run.logger.reset_nan_restarts_if_fresh()
+    run.uses_prior = dp.depth_loss != "none" or dp.lambda_temp > 0
+    run.aligner = dl.AffineAligner(dp.align_stats, dp.align_ema_decay)
+    run.prior_space, run.prior_sign, larger_is = "depth", 1.0, "farther"
+    prior_dir = dataset.depth_prior_dir or os.path.join(dataset.source_path, "depth", "2x")
+    if run.uses_prior:
+        settings = {}
+        settings_file = os.path.join(prior_dir, "chronodepth_settings.json")
+        if os.path.exists(settings_file):
+            with open(settings_file) as f:
+                settings = json.load(f)
+        space = dp.depth_prior_space
+        if space == "auto":
+            if "prior_space" not in settings:
+                raise ValueError("--depth_prior_space auto needs 'prior_space' in " + settings_file)
+            space = settings["prior_space"]
+        larger_is = settings.get("larger_is", "farther" if space == "depth" else "nearer")
+        # the inference settings of the prior travel with every run that uses it
+        run.prior_settings = {k: settings.get(k) for k in (
+            "estimator", "repo_url", "repo_commit", "checkpoint", "checkpoint_revision", "seed",
+            "window_length_F", "window_overlap", "new_frames_per_window", "denoise_steps", "sigma_epsilon",
+            "inference_resolution_hw", "output_resolution_hw", "prior_space", "larger_is")}
+        run.prior_space = space
+        # sign of the prior relative to the render target (used by the Pearson loss only)
+        run.prior_sign = 1.0 if (space == "depth") == (larger_is == "farther") else -1.0
+    run.logger.write_provenance(args, extra={
+        "resolved_depth_prior_dir": prior_dir if run.uses_prior else "",
+        "resolved_depth_prior_space": run.prior_space if run.uses_prior else "",
+        "resolved_depth_prior_larger_is": larger_is if run.uses_prior else "",
+        "resolved_k_total": opt.coarse_iterations + opt.iterations,
+        "depth_prior_settings": getattr(run, "prior_settings", {}),
+        "seeding": "setup_seed({})".format(dp.seed) if dp.seed >= 0 else "205090b default (safe_state: 0)",
+    })
+    run.logger.maybe_init_wandb(args.expname or os.path.basename(os.path.normpath(args.model_path)))
+    return run
+
+def finish_run(run, scene, gaussians, pipe, dataset, timer):
+    summary = {"training_time_seconds": timer.get_elapsed_time(),
+               "final_gaussians": int(gaussians.get_xyz.shape[0]),
+               "align_final_stats": run.aligner.state_dict(),
+               "prior_space": run.prior_space if run.uses_prior else ""}
+    if 0 in run.aligner.stats:
+        s, b, ok = run.aligner.solve(0)
+        summary.update({"align_final_s": s, "align_final_b": b, "align_final_ok": ok})
+    with torch.no_grad():
+        # fraction of canonical Gaussian centres outside the deformation grid's bounding box
+        aabb = gaussians._deformation.deformation_net.grid.aabb.to(gaussians.get_xyz.device)
+        lo, hi = torch.min(aabb[0], aabb[1]), torch.max(aabb[0], aabb[1])
+        xyz = gaussians.get_xyz
+        outside = ((xyz < lo) | (xyz > hi)).any(dim=1).float().mean().item()
+        summary["frac_gaussians_outside_grid_aabb"] = outside
+        val_cams = scene.getValCameras()
+        if val_cams is not None and len(val_cams) > 0:
+            bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+            per_frame = []
+            for i in range(len(val_cams)):
+                cam = val_cams[i]
+                image = torch.clamp(render(cam, gaussians, pipe, background, stage="fine", cam_type=scene.dataset_type)["render"], 0.0, 1.0)
+                gt_image = torch.clamp(cam.original_image.to("cuda"), 0.0, 1.0)
+                per_frame.append(psnr(image, gt_image, mask=None).mean().item())
+            val = {"PSNR": sum(per_frame) / len(per_frame), "n_frames": len(per_frame), "per_frame_PSNR": per_frame}
+            with open(os.path.join(args.model_path, "val_metrics.json"), "w") as f:
+                json.dump(val, f, indent=1)
+            summary["val_PSNR"] = val["PSNR"]
+    run.logger.log_model_artifact(args.model_path, args.expname or os.path.basename(os.path.normpath(args.model_path)))
+    run.logger.finish(summary)
+
+def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, expname, dp=None):
     # first_iter = 0
     tb_writer = prepare_output_and_logger(expname)
     gaussians = GaussianModel(dataset.sh_degree, hyper)
     dataset.model_path = args.model_path
+    run = None
+    if dp is not None:
+        run = setup_run(dataset, opt, dp)
+        dataset.load_depth_prior = run.uses_prior
     timer = Timer()
     scene = Scene(dataset, gaussians, load_coarse=None)
+    if run is not None:
+        run.logger.write_train_frames(scene)
     timer.start()
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                              checkpoint_iterations, checkpoint, debug_from,
-                             gaussians, scene, "coarse", tb_writer, opt.coarse_iterations,timer)
+                             gaussians, scene, "coarse", tb_writer, opt.coarse_iterations,timer, dp=dp, run=run)
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                          checkpoint_iterations, checkpoint, debug_from,
-                         gaussians, scene, "fine", tb_writer, opt.iterations,timer)
+                         gaussians, scene, "fine", tb_writer, opt.iterations,timer, dp=dp, run=run)
+    if run is not None:
+        timer.pause()
+        finish_run(run, scene, gaussians, pipe, dataset, timer)
 
 def prepare_output_and_logger(expname):    
     if not args.model_path:
@@ -415,6 +596,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)                                                    #Loooooooooooooooooooooooooooooooooooooo
     op = OptimizationParams(parser)                                             #oooooooooooooooooooooooooooooooooooooo
     pp = PipelineParams(parser)                                                 #iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+    dpp = DepthParams(parser)
     hp = ModelHiddenParams(parser)                                              #iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
@@ -439,11 +621,14 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
+    if args.seed >= 0:
+        # explicit --seed: Python, NumPy and PyTorch. Without it the seeding of 205090b is kept.
+        setup_seed(args.seed)
 
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)               #BELOW
-    training(lp.extract(args), hp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.expname)
+    training(lp.extract(args), hp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.expname, dp=dpp.extract(args))
 
     # All done
     print("\nTraining complete.")
