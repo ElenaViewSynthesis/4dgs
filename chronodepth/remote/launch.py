@@ -7,6 +7,7 @@ change:   modal deploy remote/app.py
     python remote/launch.py prep americano
     python remote/launch.py depth americano [--wandb-only]
     python remote/launch.py stability americano
+    python remote/launch.py dynerf coffee_martini [cam00]   # prep, ChronoDepth on one camera, one run
     python remote/launch.py runs remote/specs/b0.json
     python remote/launch.py status            # state and result of every submitted job
     python remote/launch.py collect results.csv
@@ -60,6 +61,15 @@ def main():
         record("prep", args[0], fn("prep_remote").spawn(args[0], "--force" in args))
     elif cmd == "depth":
         record("depth", args[0], fn("depth_remote").spawn(args[0], 1234, "--wandb-only" in args))
+    elif cmd == "dynerf":         # dynerf <scene> [camera]: prep, ChronoDepth on one camera, one training run
+        head = commit()
+        if head.endswith("+dirty"):
+            sys.exit("refusing to launch runs from a modified working tree: commit and redeploy first")
+        camera = args[1] if len(args) > 1 else "cam00"
+        spec = {"name": "dynerf/{}_branch_flags_off".format(args[0]), "scene": args[0],
+                "config": "arguments/dynerf/{}.py".format(args[0]), "code": "branch", "seed": None, "commit": head}
+        record("dynerf", args[0], fn("dynerf_pipeline_remote").spawn(args[0], camera, spec),
+               {"spec": spec, "camera": camera})
     elif cmd == "stability":
         record("stability", args[0], fn("stability_remote").spawn(args[0]))
     elif cmd == "space":          # space <scene> <baseline run name> <config>

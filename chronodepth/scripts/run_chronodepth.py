@@ -25,7 +25,11 @@ import numpy as np
 from PIL import Image
 
 
-def load_frames(datadir, factor):
+def load_frames(datadir, factor, frames_dir=None):
+    if frames_dir:                         # a plain directory of frames, sorted by file name
+        names = sorted(n for n in os.listdir(frames_dir) if n.lower().endswith((".png", ".jpg", ".jpeg")))
+        frames = [np.array(Image.open(os.path.join(frames_dir, n)).convert("RGB")) for n in names]
+        return [os.path.splitext(n)[0] for n in names], np.stack(frames, 0)
     with open(os.path.join(datadir, "dataset.json")) as f:
         ids = json.load(f)["ids"]          # temporal order, train and test interleaved
     frames = [np.array(Image.open(os.path.join(datadir, "rgb", f"{factor}x", f"{i}.png")).convert("RGB"))
@@ -169,6 +173,8 @@ def main():
     ap.add_argument("--infer_mode", default="ours")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--scene_name", default="")
+    ap.add_argument("--frames_dir", default="", help="read frames from this directory instead of a HyperNeRF scene")
+    ap.add_argument("--out_dir", default="", help="output directory (default <datadir>/depth/<factor>x)")
     ap.add_argument("--wandb_only", action="store_true",
                     help="do not run inference; log the maps already on disk to W&B")
     args = ap.parse_args()
@@ -176,8 +182,8 @@ def main():
     sys.path.insert(0, os.path.abspath(args.chronodepth_repo))
     if args.wandb_only:
         from src.utils.video_utils import colorize_video_depth
-        ids, video = load_frames(args.datadir, args.factor)
-        out_dir = os.path.join(args.datadir, "depth", f"{args.factor}x")
+        ids, video = load_frames(args.datadir, args.factor, args.frames_dir)
+        out_dir = args.out_dir or os.path.join(args.datadir, "depth", f"{args.factor}x")
         with open(os.path.join(out_dir, "chronodepth_settings.json")) as f:
             settings = json.load(f)
         depth = np.stack([np.load(os.path.join(out_dir, f"{i}.npy")) for i in ids], 0)
@@ -192,7 +198,7 @@ def main():
     from chronodepth.unet_chronodepth import DiffusersUNetSpatioTemporalConditionModelChronodepth
     from chronodepth.chronodepth_pipeline import ChronoDepthPipeline
 
-    ids, video = load_frames(args.datadir, args.factor)
+    ids, video = load_frames(args.datadir, args.factor, args.frames_dir)
     T, H, W, _ = video.shape
     infer_h, infer_w = resize_max_res(video[:1], args.max_res).shape[1:3]
     print(f"{T} frames, {H}x{W} -> inference at {infer_h}x{infer_w}")
@@ -219,7 +225,7 @@ def main():
     seconds = time.time() - t0
     assert depth.shape == (T, H, W), depth.shape
 
-    out_dir = os.path.join(args.datadir, "depth", f"{args.factor}x")
+    out_dir = args.out_dir or os.path.join(args.datadir, "depth", f"{args.factor}x")
     os.makedirs(os.path.join(out_dir, "preview"), exist_ok=True)
     for i, d in zip(ids, depth):
         np.save(os.path.join(out_dir, f"{i}.npy"), d.astype(np.float32))
@@ -230,7 +236,7 @@ def main():
         Image.fromarray(np.concatenate([video[t], colored[k]], axis=1)).save(
             os.path.join(out_dir, "preview", f"{k}_{ids[t]}.png"))
 
-    evidence = prior_space_evidence(args.datadir, ids, depth, args.factor)
+    evidence = None if args.frames_dir else prior_space_evidence(args.datadir, ids, depth, args.factor)
     if evidence is None:
         space, larger = "undetermined", "undetermined"
     else:
@@ -260,7 +266,8 @@ def main():
         "fp16": True,
         "xformers": xformers,
         "num_frames": int(T),
-        "frames": "all frames of dataset.json['ids'] in order (train and test interleaved)",
+        "frames": ("all frames of " + args.frames_dir + " sorted by file name") if args.frames_dir
+                  else "all frames of dataset.json['ids'] in order (train and test interleaved)",
         "output_range": "clipped to [0,1] by the official pipeline; affine-invariant",
         "output_min": float(depth.min()),
         "output_max": float(depth.max()),

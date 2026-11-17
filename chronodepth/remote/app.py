@@ -37,6 +37,9 @@ SCENES = {
     "aleks-teapot": {"zip": "interp_aleks-teapot.zip", "group": "interp"},
 }
 RELEASE = "https://github.com/google/hypernerf/releases/download/v0.1"
+# Multi-camera DyNeRF (Neural 3D Video) scenes: one mp4 per camera plus poses_bounds.npy
+DYNERF_SCENES = {"coffee_martini": "coffee_martini.zip"}
+DYNERF_RELEASE = "https://github.com/facebookresearch/Neural_3D_Video/releases/download/v1.0"
 
 app = modal.App("fdgs-depth-reg")
 volume = modal.Volume.from_name("fdgs-depth-reg", create_if_missing=True)
@@ -125,6 +128,11 @@ depth_image = (
 
 def scene_dir(scene):
     """Directory that holds dataset.json for a scene (created by `prep`)."""
+    if scene in DYNERF_SCENES:
+        cand = f"{VOL}/data/dynerf/{scene}"
+        if os.path.exists(f"{cand}/poses_bounds.npy"):
+            return cand
+        raise FileNotFoundError(f"scene {scene} not prepared under {cand}")
     root = f"{VOL}/data/hypernerf/{SCENES[scene]['group']}"
     for cand in (f"{root}/{scene}", f"{root}/{scene}/{scene}"):
         if os.path.exists(f"{cand}/dataset.json"):
@@ -188,7 +196,53 @@ def prep_remote(scene: str, force: bool = False):
             "colmap_version": sh("colmap -h | head -3")}
 
 
+@app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=10 * 3600, cpu=16, memory=65536)
+def prep_dynerf_remote(scene: str, force: bool = False):
+    """Download a DyNeRF sequence and run the baseline preprocessing as its README gives it:
+    scripts/preprocess_dynerf.py (frame extraction), colmap.sh <dir> llff, scripts/downsample_point.py."""
+    root = f"{VOL}/data/dynerf"
+    sdir = f"{root}/{scene}"
+    os.makedirs(root, exist_ok=True)
+    if not os.path.exists(f"{sdir}/poses_bounds.npy"):
+        name = DYNERF_SCENES[scene]
+        sh(f"wget -q {DYNERF_RELEASE}/{name} -O /tmp/{name} && unzip -q -o /tmp/{name} -d {root}")
+        volume.commit()
+    if not os.path.exists(f"{sdir}/poses_bounds.npy"):
+        raise FileNotFoundError("unexpected archive layout: " + sh(f"find {root} -maxdepth 3 | head -50"))
+    ply = f"{sdir}/points3D_downsample2.ply"
+    log = f"{sdir}/preprocess_log.txt"
+    env = {"PATH": f"/opt/env37/bin:{os.environ['PATH']}"}
+    if force or not os.path.exists(ply):
+        sh(f"{PY37} scripts/preprocess_dynerf.py --datadir {sdir}", cwd="/root/4dgs", env=env, log=log)
+        volume.commit()
+        with open("/root/4dgs/colmap.sh", "rb") as f:      # LF copy of the unchanged script
+            script = f.read().replace(b"\r\n", b"\n")
+        with open("/tmp/colmap_lf.sh", "wb") as f:
+            f.write(script)
+        sh(f"bash /tmp/colmap_lf.sh {sdir} llff", cwd="/root/4dgs", env=env, log=log)
+        sh(f"{PY37} scripts/downsample_point.py {sdir}/colmap/dense/workspace/fused.ply {ply}", cwd="/root/4dgs", log=log)
+        volume.commit()
+    cams = sorted(d for d in os.listdir(sdir) if d.startswith("cam") and os.path.isdir(f"{sdir}/{d}/images"))
+    return {"scene": scene, "dir": sdir, "cameras": len(cams),
+            "frames_first_camera": len(os.listdir(f"{sdir}/{cams[0]}/images")) if cams else 0,
+            "ply_bytes": os.path.getsize(ply)}
+
+
 # --------------------------------------------------------------- depth
+@app.function(image=depth_image, volumes={VOL: volume}, gpu=GPU, timeout=6 * 3600, memory=65536, secrets=secrets)
+def depth_dynerf_remote(scene: str, camera: str = "cam00", seed: int = 1234):
+    """ChronoDepth on the frames of ONE camera of a DyNeRF scene; previews, statistics and the
+    depth video are tracked in W&B as chronodepth-prior/<scene>/<camera>."""
+    sdir = scene_dir(scene)
+    out = f"{sdir}/depth_chronodepth/{camera}"
+    sh(f"python /root/scripts/run_chronodepth.py --datadir {sdir} --frames_dir {sdir}/{camera}/images "
+       f"--out_dir {out} --chronodepth_repo /opt/ChronoDepth --repo_url {CHRONODEPTH_URL} --seed {seed} "
+       f"--scene_name {scene}/{camera}", env={"WANDB_PROJECT": WANDB_PROJECT, "WANDB_SILENT": "true"})
+    volume.commit()
+    with open(f"{out}/chronodepth_settings.json") as f:
+        return json.load(f)
+
+
 @app.function(image=depth_image, volumes={VOL: volume}, gpu=GPU, timeout=6 * 3600, memory=65536, secrets=secrets)
 def depth_remote(scene: str, seed: int = 1234, wandb_only: bool = False):
     sdir = scene_dir(scene)
@@ -326,6 +380,24 @@ def run_remote(spec: dict):
         f.write(f"{spec.get('commit', 'unknown')} code={spec.get('code', 'branch')}\n")
     volume.commit()
     return status
+
+
+@app.function(image=train_image, timeout=20 * 3600)
+def dynerf_pipeline_remote(scene: str, camera: str, spec: dict):
+    """Preprocessing, ChronoDepth on one camera, then one training run, one after the other,
+    so the whole chain holds one GPU at a time and does not depend on the local machine."""
+    out = {"scene": scene, "camera": camera, "stages": ""}
+    out["prep"] = prep_dynerf_remote.remote(scene)
+    out["stages"] += "prep ok; "
+    try:
+        d = depth_dynerf_remote.remote(scene, camera)
+        out["depth"] = {k: d.get(k) for k in ("num_frames", "inference_resolution_hw", "inference_seconds")}
+        out["stages"] += "depth ok; "
+    except Exception as e:                      # the training run does not need the depth maps
+        out["stages"] += "depth FAILED: " + str(e)[:300] + "; "
+    out["run"] = run_remote.remote(spec)
+    out["stages"] += "run " + str(out["run"].get("status")) + " " + str(out["run"].get("error", ""))[:300]
+    return out
 
 
 @app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=3600, memory=32768)
