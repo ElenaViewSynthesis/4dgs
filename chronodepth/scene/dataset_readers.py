@@ -360,7 +360,8 @@ def format_infos(dataset,split):
             image_name = f"{idx}"
             time = dataset.image_times[idx]
             # matrix = np.linalg.inv(np.array(pose))
-            print(f"Loaded {len(self.image_paths)} images from {root_dir}")   # HERE
+            # 205090b has a debug print here that reads `self` and `root_dir`, neither of which
+            # exists in this function, so every DyNeRF scene fails with NameError. Removed.
             R,T = dataset.load_pose(idx)
             FovX = focal2fov(dataset.focal[0], image.shape[1])
             FovY = focal2fov(dataset.focal[0], image.shape[2])
