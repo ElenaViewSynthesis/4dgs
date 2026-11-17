@@ -29,6 +29,8 @@ PY37 = "/opt/env37/bin/python"
 CHRONODEPTH_URL = "https://github.com/jhaoshao/ChronoDepth"
 CHRONODEPTH_COMMIT = "2580e891eb33a5c3a95eab27b745f64ac28b3514"
 GPU = os.environ.get("FDGS_GPU", "A100-40GB")
+# At most this many training runs hold a GPU at once; further submissions queue.
+MAX_RUN_GPUS = int(os.environ.get("FDGS_MAX_RUN_GPUS", "4"))
 
 SCENES = {
     "americano": {"zip": "misc_americano.zip", "group": "misc"},
@@ -283,7 +285,7 @@ class GpuMemSampler:
         return summary
 
 
-@app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=8 * 3600, cpu=8, memory=49152,
+@app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=8 * 3600, cpu=8, memory=49152, max_containers=MAX_RUN_GPUS,
               secrets=secrets)
 def run_remote(spec: dict):
     """One run: train, render the full test set, compute metrics.
