@@ -62,6 +62,7 @@ class ModelParams(ParamGroup):
         self.depth_prior_dir = ""   # per-frame priors {frame_id}.npy; "" -> <source_path>/depth/2x
         self.train_every = 1        # keep every N-th training frame (sparse-view experiments)
         self.val_holdout = 0        # N>0: hold out every N-th training frame as validation
+        self.exclude_cams = ""      # DyNeRF: comma-separated cameras left out of the TRAINING set, e.g. "cam11,cam16"
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

@@ -51,8 +51,19 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval, args.extension)
             dataset_type="blender"
         elif os.path.exists(os.path.join(args.source_path, "poses_bounds.npy")):
-            scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval)
+            exclude_cams = [c.strip() for c in (getattr(args, "exclude_cams", "") or "").split(",") if c.strip()]
+            scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval,
+                                                         exclude_cams=exclude_cams)
             dataset_type="dynerf"
+            train_set = scene_info.train_cameras
+            cam_report = {"cameras_on_disk": train_set.cams_on_disk, "test_camera": train_set.test_cam,
+                          "cameras_excluded": exclude_cams, "cameras_used_for_training": train_set.cams_used,
+                          "n_train_cameras": len(train_set.cams_used), "n_train_images": len(train_set)}
+            print("DyNeRF cameras:", json.dumps(cam_report))
+            if not self.loaded_iter:          # training start-up, not a later render of the saved model
+                os.makedirs(self.model_path, exist_ok=True)
+                with open(os.path.join(self.model_path, "train_cameras.json"), "w") as f:
+                    json.dump(cam_report, f, indent=1)
         elif os.path.exists(os.path.join(args.source_path,"dataset.json")):
             val_holdout = getattr(args, "val_holdout", 0) or 0
             scene_info = sceneLoadTypeCallbacks["nerfies"](args.source_path, False, args.eval,

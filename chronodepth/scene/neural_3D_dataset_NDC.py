@@ -224,7 +224,10 @@ class Neural3D_NDC_Dataset(Dataset):
         eval_step=1,
         eval_index=0,
         sphere_scale=1.0,
+        exclude_cams=(),
     ):
+        # cameras left out of the training split only; () keeps the loader unchanged
+        self.exclude_cams = [c for c in exclude_cams if c]
         self.img_wh = (
             int(1352 / downsample),
             int(1014 / downsample),
@@ -266,6 +269,16 @@ class Neural3D_NDC_Dataset(Dataset):
         videos = sorted(videos)
         # breakpoint()
         assert len(videos) == poses_arr.shape[0]  #HERE #uncomment
+        self.cams_on_disk = [os.path.basename(v).split('.')[0] for v in videos]
+        self.test_cam = self.cams_on_disk[self.eval_index]
+        missing = [c for c in self.exclude_cams if c not in self.cams_on_disk]
+        if missing:
+            raise ValueError("--exclude_cams names cameras that are not on disk: {}. Cameras on disk: {}. "
+                             "Nothing was substituted.".format(missing, self.cams_on_disk))
+        if self.test_cam in self.exclude_cams:
+            raise ValueError("--exclude_cams names the test camera {}, which is never excluded".format(self.test_cam))
+        self.cams_used = []      # cameras whose frames are in this split
+        self.image_cams = []     # camera name of every image of this split
 
         H, W, focal = poses[0, :, -1]
         focal = focal / self.downsample
@@ -316,6 +329,10 @@ class Neural3D_NDC_Dataset(Dataset):
             else:
                 if split == "test":
                     continue
+            cam_name = os.path.basename(video_path).split('.')[0]
+            if split == "train" and cam_name in self.exclude_cams:
+                continue
+            self.cams_used.append(cam_name)
             N_cams +=1
             count = 0
             video_images_path = video_path.split('.')[0]
@@ -348,6 +365,7 @@ class Neural3D_NDC_Dataset(Dataset):
             for idx, path in enumerate(images_path):
                 if this_count >=countss:break
                 image_paths.append(os.path.join(image_path,path))
+                self.image_cams.append(cam_name)
                 pose = np.array(self.poses_all[index])
                 R = pose[:3,:3]
                 R = -R
