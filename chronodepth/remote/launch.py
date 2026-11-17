@@ -62,6 +62,10 @@ def main():
         record("depth", args[0], fn("depth_remote").spawn(args[0], 1234, "--wandb-only" in args))
     elif cmd == "stability":
         record("stability", args[0], fn("stability_remote").spawn(args[0]))
+    elif cmd == "space":          # space <scene> <baseline run name> <config>
+        record("space", args[0], fn("space_remote").spawn(args[0], args[1], args[2]))
+    elif cmd == "diagnostics":    # diagnostics <run name> <baseline run name> <config>
+        record("diagnostics", args[0], fn("diagnostics_remote").spawn(args[0], args[1], args[2]))
     elif cmd == "tests":
         record("tests", "unit", fn("tests_remote").spawn())
     elif cmd == "runs":

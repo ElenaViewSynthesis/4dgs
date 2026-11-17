@@ -261,6 +261,27 @@ def run_remote(spec: dict):
     return status
 
 
+@app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=3600, memory=32768)
+def space_remote(scene: str, run_name: str, config: str):
+    """Dense depth-vs-disparity check of the prior against a trained baseline model."""
+    sdir = scene_dir(scene)
+    sh(f"{PY37} scripts/check_prior_space.py --model_path {VOL}/output/{run_name} --configs {config} "
+       f"--prior_dir {sdir}/depth/2x", cwd="/root/4dgs")
+    volume.commit()
+    with open(f"{sdir}/depth/2x/prior_space_check.json") as f:
+        out = json.load(f)
+    out.pop("per_frame", None)
+    return out
+
+
+@app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=3600, memory=32768)
+def diagnostics_remote(run_name: str, baseline_name: str, config: str):
+    sh(f"{PY37} scripts/diagnostics.py --model_path {VOL}/output/{run_name} "
+       f"--baseline_path {VOL}/output/{baseline_name} --configs {config}", cwd="/root/4dgs")
+    volume.commit()
+    return {"diagnostics": f"output/{run_name}/diagnostics"}
+
+
 # ------------------------------------------------------- entry points
 def local_commit():
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO).decode().strip()
