@@ -58,6 +58,10 @@ class ModelParams(ParamGroup):
         self.add_points=False
         self.extension=".png"
         self.llffhold=8
+        # depth-regulariser data options (defaults leave the loaders unchanged)
+        self.depth_prior_dir = ""   # per-frame priors {frame_id}.npy; "" -> <source_path>/depth/2x
+        self.train_every = 1        # keep every N-th training frame (sparse-view experiments)
+        self.val_holdout = 0        # N>0: hold out every N-th training frame as validation
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -148,6 +152,37 @@ class OptimizationParams(ParamGroup):
         self.batch_size=1
         self.add_point=False
         super().__init__(parser, "Optimization Parameters")
+
+class DepthParams(ParamGroup):
+    """Video-depth regulariser (paper Sec. 4). Every default means "off"."""
+    def __init__(self, parser):
+        self.depth_loss = "none"              # none | l1_aligned | pearson
+        self.lambda_depth = 0.0               # lambda_d at the first iteration
+        self.lambda_depth_end = 0.0           # lambda_d at the last iteration (decay schedules)
+        self.lambda_depth_schedule = "const"  # const | linear_decay | exp_decay
+        self.lambda_temp = 0.0                # lambda_t, fine stage only
+        self.omega_thresh = 0.9               # accumulated-opacity threshold defining Omega
+        self.align = "per_camera"             # per_camera | per_frame
+        self.align_stats = "cumulative"       # cumulative | ema
+        self.align_ema_decay = 0.99           # decay per update when align_stats == ema
+        self.depth_prior_space = "auto"       # auto | depth | disparity (auto: chronodepth_settings.json)
+        self.seed = -1                        # <0: keep the seeding of commit 205090b
+        super().__init__(parser, "Depth Regulariser Parameters")
+
+    CHOICES = {
+        "depth_loss": ("none", "l1_aligned", "pearson"),
+        "lambda_depth_schedule": ("const", "linear_decay", "exp_decay"),
+        "align": ("per_camera", "per_frame"),
+        "align_stats": ("cumulative", "ema"),
+        "depth_prior_space": ("auto", "depth", "disparity"),
+    }
+
+    def extract(self, args):
+        g = super().extract(args)
+        for key, allowed in self.CHOICES.items():
+            if getattr(g, key) not in allowed:
+                raise ValueError("--{} must be one of {}, got {!r}".format(key, allowed, getattr(g, key)))
+        return g
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]

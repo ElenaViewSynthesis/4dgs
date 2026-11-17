@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, stage="fine", cam_type=None, return_depth_alpha=False):
     """
     Render the scene. 
     
@@ -131,9 +131,34 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # breakpoint()
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
+    out = {"render": rendered_image,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii,
             "depth":depth}
+    if return_depth_alpha:
+        # The rasteriser's own "depth" output has no backward pass (backward.cu never
+        # reads a depth gradient), so a loss on it would not train anything. Render
+        # depth and accumulated opacity through the differentiable colour channels
+        # instead: colour = (z, 1, 0) on a black background gives
+        #   channel 0 = sum_i z_i alpha_i T_i   (same quantity as "depth" above)
+        #   channel 1 = sum_i alpha_i T_i       (accumulated opacity)
+        # The deformed Gaussians are reused, so the deformation network runs once.
+        viewmatrix = raster_settings.viewmatrix
+        z = means3D_final @ viewmatrix[:3, 2] + viewmatrix[3, 2]
+        aux_color = torch.stack([z, torch.ones_like(z), torch.zeros_like(z)], dim=1)
+        aux_settings = raster_settings._replace(bg=torch.zeros_like(raster_settings.bg))
+        aux_means2D = torch.zeros_like(means3D_final, requires_grad=True)
+        aux_image, _, _ = GaussianRasterizer(raster_settings=aux_settings)(
+            means3D = means3D_final,
+            means2D = aux_means2D,
+            shs = None,
+            colors_precomp = aux_color,
+            opacities = opacity,
+            scales = scales_final,
+            rotations = rotations_final,
+            cov3D_precomp = cov3D_precomp)
+        out["depth_diff"] = aux_image[0]
+        out["alpha"] = aux_image[1]
+    return out
 
