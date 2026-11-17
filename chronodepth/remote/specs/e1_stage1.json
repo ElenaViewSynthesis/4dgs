@@ -1,0 +1,38 @@
+[
+ {
+  "name": "e1/americano_val_baseline_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_val_baseline.py",
+  "seed": 0
+ },
+ {
+  "name": "e1/americano_ld0p01_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_ld0p01.py",
+  "seed": 0
+ },
+ {
+  "name": "e1/americano_ld0p03_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_ld0p03.py",
+  "seed": 0
+ },
+ {
+  "name": "e1/americano_ld0p1_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_ld0p1.py",
+  "seed": 0
+ },
+ {
+  "name": "e1/americano_ld0p3_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_ld0p3.py",
+  "seed": 0
+ },
+ {
+  "name": "e1/americano_ld1p0_s0",
+  "scene": "americano",
+  "config": "arguments/hypernerf/exp/e1_ld1p0.py",
+  "seed": 0
+ }
+]

@@ -1,0 +1,15 @@
+[
+ {
+  "name": "b0/americano_base_205090b",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null
+ }
+]
