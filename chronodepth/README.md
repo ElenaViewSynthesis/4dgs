@@ -8,9 +8,10 @@ output of a temporally consistent video-depth estimator,
 The original 4DGaussians README is kept unchanged as [`README_4DGaussians.md`](README_4DGaussians.md).
 
 > **Status, 17 November 2026.** The regulariser is implemented and unit-tested. Depth priors exist for
-> both scenes. **No experiment has finished and there is no result to report yet.** The check that the
-> baseline is unchanged when every new flag is off (B0) is running. Nothing in this file is a claim
-> that the regulariser helps.
+> both scenes. **No regularised experiment has been run.** The check that the baseline is unchanged
+> when every new flag is off (B0) has been run 23 times and **does not pass as worded: the unmodified
+> baseline itself is unstable on *americano*** (section 10). The dense check says the priors are
+> affine in depth (section 7). Nothing in this file is a claim that the regulariser helps.
 
 ---
 
@@ -245,14 +246,25 @@ choice between depth and disparity. The two correlations differ in the third dec
 flips between scenes. The `prior_space` field that the script wrote into the two settings files
 (`depth` for *americano*, `disparity` for *aleks-teapot*) is therefore noise and must not be used.
 
-**Second measurement (dense, pending).** `scripts/check_prior_space.py` renders depth from a trained
-baseline model for 32 training frames and fits the prior against rendered depth and against inverse
-rendered depth over all pixels of Ω, per frame and pooled with a single `(s, b)`. It runs once B0 has
-produced a baseline model. The baseline's geometry is itself an estimate, so this is a comparison of
-two fits against a reference, not against ground truth.
+**Second measurement (dense, *americano*).** `scripts/check_prior_space.py` renders depth from a
+trained model for 32 training frames and fits the prior against rendered depth and against inverse
+rendered depth over all pixels of Ω, per frame and pooled with a single `(s, b)`. The reference was
+the first B0 branch run with flags off (30.80 dB, a "degraded" run in the table of section 10). At
+least 93.7% of pixels were in Ω in every frame.
 
-Until it is settled no regularised run is started, and the space will be set explicitly in every
-experiment config rather than read with `auto`.
+| Fit | Against depth | Against inverse depth |
+|---|---|---|
+| Pooled, one `(s, b)`, Pearson r | +0.864 | −0.824 |
+| Pooled, relative L1 residual | 0.376 | 0.459 |
+| Per-frame median r | +0.916 | −0.877 |
+| Frames where this space fits better | 32 of 32 | 0 of 32 |
+
+The priors are affine in **depth**, larger meaning farther, so the alignment of section 4 is valid as
+written and `depth_prior_space='depth'` will be set explicitly in every experiment config rather
+than read with `auto`. Two cautions: the reference is a model's own geometry, not ground truth, and
+the margin is moderate. And when each frame is fitted separately the scale ranges from 15.4 to 54.0
+over the sequence, so a single scale and shift per camera does not fit this sequence closely; that is
+what ablation (e) of E2 tests. The check has not been run on *aleks-teapot*.
 
 Both spaces are implemented: with `--depth_prior_space disparity` every term uses the
 alpha-normalised inverse rendered depth `A / D̂` in place of `D̂`.
@@ -320,10 +332,10 @@ LPIPS-Alex, plus Gaussian count, training time and render FPS.
 
 | Block | What | State |
 |---|---|---|
-| Preprocessing | COLMAP and point cloud, both scenes | *americano* done; *aleks-teapot* in its final COLMAP pass |
+| Preprocessing | COLMAP and point cloud, both scenes | done |
 | Depth priors | ChronoDepth, both scenes | done |
-| **B0** | Baseline at `205090b` against this code with every flag off, *americano*, same seeding | running |
-| Prior space | Dense depth-versus-disparity check (section 7) | waits for B0 |
+| **B0** | Baseline at `205090b` against this code with every flag off, *americano*, same seeding | 23 runs done; does not pass as worded, see below |
+| Prior space | Dense depth-versus-disparity check (section 7) | done on *americano*: depth |
 | **E1** | Hyperparameter selection on *americano*, one seed, selected on validation PSNR (every 5th training frame held out): λ_d ∈ {0.01, 0.03, 0.1, 0.3, 1.0}; then Ω threshold ∈ {0.5, 0.9, 0.99} and schedule ∈ {const, linear decay to 0}; then λ_t ∈ {0, 0.01, 0.1, 1.0} | not started |
 | **E2** | Main comparison, 3 seeds, both scenes: (a) baseline, (b) + L_depth, (c) + L_corr instead, (d) + L_depth + L_temp, (e) as (d) with `--align per_frame` | not started |
 | **E3** | Sparse views, 3 seeds, both scenes: every 2nd, 4th and 8th training frame; (a) against the best of E2 | not started |
@@ -336,6 +348,79 @@ Rules the results will be reported under:
 - the whole sweep is reported, not only the winner, and selection never uses test metrics;
 - a difference smaller than the seed-to-seed spread is not called an improvement;
 - "no measurable effect" is a valid outcome and will be stated where true.
+
+### B0 result: the baseline itself is unstable on *americano*
+
+B0 was meant to be one run of each code. The first pair differed by 0.56 dB, so it was repeated:
+23 runs in total, all on *americano*, 14,000 iterations, the reference config, default seeding, one
+A100-40GB each. Every run is listed. "Healthy" means test PSNR above 31.2 dB, "collapsed" below
+27 dB, "degraded" in between; the thresholds are labels chosen after seeing the results.
+
+| Arm | Run | Outcome | PSNR | SSIM | LPIPS-VGG | LPIPS-Alex | Final Gaussians |
+|---|---|---|---|---|---|---|---|
+| Baseline `205090b` | r1 | healthy | 31.3588 | 0.9167 | 0.1377 | 0.0702 | 213,500 |
+|  | r2 | healthy | 31.4222 | 0.9178 | 0.1353 | 0.0686 | 213,648 |
+|  | r3 | healthy | 31.3801 | 0.9170 | 0.1364 | 0.0693 | 213,538 |
+|  | r4 | degraded | 30.5720 | 0.9033 | 0.1727 | 0.0970 | 219,447 |
+|  | r5 | collapsed | 25.7450 | 0.7995 | 0.3060 | 0.1980 | 363,393 |
+|  | r6 | crashed at fine 7,970, after collapsing | — | — | — | — | — |
+|  | r7 | healthy | 31.3542 | 0.9170 | 0.1362 | 0.0690 | 212,238 |
+|  | r8 | healthy | 31.3553 | 0.9171 | 0.1369 | 0.0703 | 213,029 |
+| Branch, flags off, W&B tracking on | r1 | degraded | 30.8006 | 0.9071 | 0.1648 | 0.0895 | 212,293 |
+|  | r2 | collapsed | 25.8924 | 0.8016 | 0.3043 | 0.1992 | 360,927 |
+|  | r3 | collapsed | 25.5033 | 0.7942 | 0.3102 | 0.2072 | 314,524 |
+| Branch, flags off, W&B tracking off | r2 | collapsed | 25.9744 | 0.8066 | 0.2984 | 0.1932 | 361,760 |
+|  | r3 | healthy | 31.2919 | 0.9163 | 0.1383 | 0.0707 | 214,233 |
+|  | r4 | healthy | 31.3692 | 0.9168 | 0.1380 | 0.0705 | 219,484 |
+|  | r5 | crashed at fine 1,800 | — | — | — | — | — |
+|  | r6 | collapsed | 24.6862 | 0.7648 | 0.3419 | 0.2412 | 360,950 |
+|  | r7 | degraded | 30.4624 | 0.9025 | 0.1714 | 0.0915 | 232,603 |
+|  | r8 | healthy | 31.3823 | 0.9177 | 0.1366 | 0.0687 | 212,931 |
+| Branch, flags off, per-run logging disabled | r4 | healthy | 31.3372 | 0.9170 | 0.1367 | 0.0696 | 213,238 |
+|  | r5 | crashed at fine 880 | — | — | — | — | — |
+|  | r6 | healthy | 31.2958 | 0.9163 | 0.1373 | 0.0709 | 214,169 |
+|  | r7 | collapsed | 25.8065 | 0.8010 | 0.3055 | 0.1991 | 360,969 |
+|  | r8 | degraded | 29.3591 | 0.8811 | 0.2028 | 0.1126 | 276,967 |
+
+| Arm | Runs | Healthy | Degraded | Collapsed | Crashed |
+|---|---|---|---|---|---|
+| Baseline `205090b` | 8 | 5 | 1 | 1 | 1 |
+| Branch, flags off, W&B tracking on | 3 | 0 | 1 | 2 | 0 |
+| Branch, flags off, W&B tracking off | 7 | 3 | 1 | 2 | 1 |
+| Branch, flags off, per-run logging disabled | 5 | 2 | 1 | 1 | 1 |
+
+What the runs show:
+
+- **The unmodified baseline fails too.** Three of its eight runs are not healthy: one degraded, one
+  collapsed to 25.7 dB, one crashed after collapsing. The collapses are therefore not introduced by
+  this code.
+- **The added logging is not the cause.** Collapses occur with W&B tracking on, with it off, and with
+  all per-run logging disabled (`FDGS_NO_RUN_LOGGING=1`).
+- **Healthy runs of the two codes agree.** Baseline 31.374 ± 0.029 dB (5 runs); branch 31.335 ± 0.041 dB (5 runs).
+- **The failure rates cannot be told apart at this sample size.** 5 of 8 baseline runs are healthy
+  against 5 of 15 branch runs (Fisher's exact test, two-sided, p = 0.22). The branch looks worse
+  and a higher failure rate for it is not ruled out.
+- **The collapse.** The coarse stage is the same in every run (test PSNR 20.88–20.91 at iteration
+  3,000). In the fine stage the training loss drifts upward over a few hundred iterations, at a
+  different point in each run (near fine iteration 1,800, 2,000–2,500 and 6,000 in three that were
+  traced), and does not recover. The Gaussian count then grows towards the 360,000 cap instead of
+  settling near 213,000. No run had a NaN restart.
+- **The crashes.** Three runs, one per arm, stopped with
+  `CUDA error: CUBLAS_STATUS_EXECUTION_FAILED`. None of the logs contains an out-of-memory message,
+  and two of the three crashed with 103,175 and 127,347 Gaussians, well below the count healthy runs
+  reach. The cause is not known. Five baseline runs with `CUDA_LAUNCH_BLOCKING=1` and external GPU
+  memory sampling (`remote/specs/b0_debug_blocking.json`) are running to locate it.
+
+Consequences:
+
+- B0 does **not** pass as worded ("flags off behaves as `205090b`") on single runs; both codes are
+  bimodal on this scene, and equivalence can only be stated for the healthy runs and as a comparison
+  of failure rates.
+- The baseline's run-to-run spread among healthy runs is about 0.03 dB, tighter than the 0.13 dB
+  assumed in the task; but single runs of either code have landed 0.8 to 6.7 dB lower.
+- No regularised run has been started. With this instability, a 3-seed comparison (E2) cannot
+  separate an effect of the regulariser from a collapsed seed, so the plan needs either more seeds
+  per arm or the instability fixed first. That decision is open.
 
 ---
 
@@ -410,6 +495,10 @@ python remote/launch.py collect results.csv
 
 `launch.py runs` refuses to start from a modified working tree, so every run maps to one commit.
 
+At most `FDGS_MAX_RUN_GPUS` training runs (default 4, read at deploy time) hold a GPU at once; further
+submissions queue. Every run also writes `gpu_mem.csv` and `gpu_mem_summary.json`: GPU and container
+memory sampled every 2 s from outside the training process, so the baseline code is not touched.
+
 ---
 
 ## 12. Findings about the baseline repository
@@ -436,6 +525,9 @@ Verified in the code at `205090b`. None of these was changed, so that the baseli
    code-default iteration count appended before the merge.
 8. **`colmap.sh` with Windows line endings corrupts every path it builds.** On a Windows checkout,
    convert it to LF before running it on Linux; the remote launcher does this on a copy.
+9. **Training is unstable on *americano* at the reference config.** Of eight runs of the unmodified
+   code, one collapsed to 25.7 dB, one crashed with a CUDA error after collapsing and one finished
+   0.8 dB low (section 10). Training is also not bit-reproducible under the default seeding.
 
 ---
 
