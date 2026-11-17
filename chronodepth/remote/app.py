@@ -244,6 +244,10 @@ def run_remote(spec: dict):
         return status
     sh(f"rm -rf {out} && mkdir -p {out}")
     env = {"GIT_COMMIT": spec.get("commit", "unknown"), "WANDB_SILENT": "true", "WANDB_PROJECT": WANDB_PROJECT}
+    if spec.get("no_run_logging"):
+        env["FDGS_NO_RUN_LOGGING"] = "1"
+    if spec.get("no_wandb"):
+        env["WANDB_API_KEY"] = ""          # tracking off for this run (local files only)
     seed = "" if spec.get("seed") is None or spec.get("code") == "base" else f"--seed {spec['seed']}"
     cfg = spec["config"]
     try:

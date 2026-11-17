@@ -628,7 +628,9 @@ if __name__ == "__main__":
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)               #BELOW
-    training(lp.extract(args), hp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.expname, dp=dpp.extract(args))
+    training(lp.extract(args), hp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.expname,
+             # FDGS_NO_RUN_LOGGING=1 is a debugging switch: no per-run logging objects at all
+             dp=None if os.environ.get("FDGS_NO_RUN_LOGGING") == "1" else dpp.extract(args))
 
     # All done
     print("\nTraining complete.")

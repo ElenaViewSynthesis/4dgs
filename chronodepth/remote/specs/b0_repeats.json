@@ -1,0 +1,44 @@
+[
+ {
+  "name": "b0/americano_base_205090b_r2",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_r2",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r2",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_base_205090b_r3",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_r3",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r3",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ }
+]

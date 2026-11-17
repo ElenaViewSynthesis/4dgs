@@ -1,0 +1,117 @@
+[
+ {
+  "name": "b0/americano_base_205090b_r4",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r4",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_branch_nologging_r4",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true,
+  "no_run_logging": true
+ },
+ {
+  "name": "b0/americano_base_205090b_r5",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r5",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_branch_nologging_r5",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true,
+  "no_run_logging": true
+ },
+ {
+  "name": "b0/americano_base_205090b_r6",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r6",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_branch_nologging_r6",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true,
+  "no_run_logging": true
+ },
+ {
+  "name": "b0/americano_base_205090b_r7",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r7",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_branch_nologging_r7",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true,
+  "no_run_logging": true
+ },
+ {
+  "name": "b0/americano_base_205090b_r8",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base"
+ },
+ {
+  "name": "b0/americano_branch_flags_off_nowandb_r8",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true
+ },
+ {
+  "name": "b0/americano_branch_nologging_r8",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "branch",
+  "seed": null,
+  "no_wandb": true,
+  "no_run_logging": true
+ }
+]
