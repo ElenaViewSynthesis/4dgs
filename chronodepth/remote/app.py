@@ -254,6 +254,34 @@ def depth_remote(scene: str, seed: int = 1234, wandb_only: bool = False):
         return json.load(f)
 
 
+@app.function(image=depth_image, volumes={VOL: volume}, gpu=GPU, timeout=10 * 3600, memory=65536, secrets=secrets)
+def depth_dynerf_all_remote(scene: str, wandb_camera: str = "cam16", seed: int = 1234):
+    """ChronoDepth for every camera of a DyNeRF scene, one after the other on one GPU, with the
+    same settings and seed. Cameras that already have maps are skipped. Only `wandb_camera` is
+    tracked in W&B (depth video, previews); the other cameras write local files only."""
+    sdir = scene_dir(scene)
+    cams = sorted(d for d in os.listdir(sdir) if d.startswith("cam") and os.path.isdir(f"{sdir}/{d}/images"))
+    report = {"scene": scene, "wandb_camera": wandb_camera, "cameras": len(cams), "ran": "", "skipped": "", "failed": ""}
+    for cam in cams:
+        out = f"{sdir}/depth_chronodepth/{cam}"
+        have = os.path.exists(f"{out}/chronodepth_settings.json")
+        if have and cam != wandb_camera:
+            report["skipped"] += cam + " "
+            continue
+        env = {"WANDB_PROJECT": WANDB_PROJECT, "WANDB_SILENT": "true"}
+        if cam != wandb_camera:
+            env["WANDB_API_KEY"] = ""
+        try:
+            sh(f"python /root/scripts/run_chronodepth.py --datadir {sdir} --frames_dir {sdir}/{cam}/images "
+               f"--out_dir {out} --chronodepth_repo /opt/ChronoDepth --repo_url {CHRONODEPTH_URL} --seed {seed} "
+               f"--scene_name {scene}/{cam}" + (" --wandb_only" if have else ""), env=env)
+            report["ran"] += cam + " "
+        except Exception as e:
+            report["failed"] += cam + ": " + str(e)[-200:] + " | "
+        volume.commit()
+    return report
+
+
 @app.function(image=depth_image, volumes={VOL: volume}, gpu=GPU, timeout=3 * 3600, memory=32768)
 def stability_remote(scene: str):
     """Per-frame Depth Anything V2 maps, then the temporal-stability number for both estimators."""

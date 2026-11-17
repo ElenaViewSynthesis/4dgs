@@ -70,6 +70,9 @@ def main():
                 "config": "arguments/dynerf/{}.py".format(args[0]), "code": "branch", "seed": None, "commit": head}
         record("dynerf", args[0], fn("dynerf_pipeline_remote").spawn(args[0], camera, spec),
                {"spec": spec, "camera": camera})
+    elif cmd == "depthall":       # depthall <scene> [camera tracked in W&B]: ChronoDepth for every camera, one GPU
+        cam = args[1] if len(args) > 1 else "cam16"
+        record("depthall", args[0], fn("depth_dynerf_all_remote").spawn(args[0], cam), {"wandb_camera": cam})
     elif cmd == "stability":
         record("stability", args[0], fn("stability_remote").spawn(args[0]))
     elif cmd == "space":          # space <scene> <baseline run name> <config>
