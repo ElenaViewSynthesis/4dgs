@@ -371,9 +371,11 @@ def format_infos(dataset,split):
     return cameras
 
 
-def readHyperDataInfos(datadir,use_bg_points,eval):
-    train_cam_infos = Load_hyper_data(datadir,0.5,use_bg_points,split ="train")
-    test_cam_infos = Load_hyper_data(datadir,0.5,use_bg_points,split="test")
+def readHyperDataInfos(datadir,use_bg_points,eval, train_every=1, val_holdout=0, depth_prior_dir=None, load_depth_prior=False):
+    split_kwargs = dict(train_every=train_every, val_holdout=val_holdout,
+                        depth_prior_dir=depth_prior_dir, load_depth_prior=load_depth_prior)
+    train_cam_infos = Load_hyper_data(datadir,0.5,use_bg_points,split ="train", **split_kwargs)
+    test_cam_infos = Load_hyper_data(datadir,0.5,use_bg_points,split="test", **split_kwargs)
     print("load finished")
     train_cam = format_hyper_data(train_cam_infos,"train")
     print("format finished")
@@ -397,7 +399,11 @@ def readHyperDataInfos(datadir,use_bg_points,eval):
                            ply_path=ply_path,
                            maxtime=max_time
                            )
-
+    if val_holdout and val_holdout > 0:
+        val_cam_infos = copy.deepcopy(test_cam_infos)
+        val_cam_infos.split = "val"
+        val_cam_infos.map = {}
+        return scene_info, val_cam_infos
     return scene_info
 def format_render_poses(poses,data_infos):
     cameras = []

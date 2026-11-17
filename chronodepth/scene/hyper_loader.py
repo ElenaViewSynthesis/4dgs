@@ -32,6 +32,7 @@ class CameraInfo(NamedTuple):
     height: int
     time : float
     mask: np.array
+    depth: np.array = None
 
 
 class Load_hyper_data(Dataset):
@@ -39,7 +40,11 @@ class Load_hyper_data(Dataset):
                  datadir, 
                  ratio=1.0,
                  use_bg_points=False,
-                 split="train"
+                 split="train",
+                 train_every=1,
+                 val_holdout=0,
+                 depth_prior_dir=None,
+                 load_depth_prior=False
                  ):
         
         from .utils import Camera
@@ -64,7 +69,21 @@ class Load_hyper_data(Dataset):
                             (i%4 == 0)])
             self.i_test = self.i_train+2
             self.i_test = self.i_test[:-1,]
+            # Optional reductions of the training split. The test split above is
+            # computed first and never changes. With both options at their
+            # defaults (1, 0) the split is the one of commit 205090b.
+            self.i_val = np.array([], dtype=self.i_train.dtype)
+            if train_every and train_every > 1:
+                self.i_train = self.i_train[::train_every]
+            if val_holdout and val_holdout > 0:
+                pos = np.arange(len(self.i_train))
+                is_val = (pos % val_holdout) == (val_holdout // 2)
+                self.i_val = self.i_train[is_val]
+                self.i_train = self.i_train[~is_val]
         else:
+            if (train_every and train_every > 1) or (val_holdout and val_holdout > 0):
+                raise NotImplementedError("train_every / val_holdout need a dataset without val_ids")
+            self.i_val = []
             self.train_id = dataset_json['train_ids']
             self.i_test = []
             self.i_train = []
@@ -91,7 +110,15 @@ class Load_hyper_data(Dataset):
 
             self.all_cam_params.append(camera)
         self.all_img_origin = self.all_img
-        self.all_depth = [f'{datadir}/depth/{int(1/ratio)}x/{i}.npy' for i in self.all_img]
+        if not depth_prior_dir:
+            depth_prior_dir = f'{datadir}/depth/{int(1/ratio)}x'
+        self.depth_prior_dir = depth_prior_dir
+        self.load_depth_prior = bool(load_depth_prior)
+        self.all_depth = [f'{depth_prior_dir}/{i}.npy' for i in self.all_img]
+        if self.load_depth_prior and split == "train":
+            missing = [self.all_depth[i] for i in self.i_train if not os.path.exists(self.all_depth[i])]
+            if missing:
+                raise FileNotFoundError(f"{len(missing)} depth priors missing, e.g. {missing[0]}")
 
         self.all_img = [f'{datadir}/rgb/{int(1/ratio)}x/{i}.png' for i in self.all_img]
 
@@ -120,11 +147,15 @@ class Load_hyper_data(Dataset):
  
         elif self.split == "test":
             return self.load_raw(self.i_test[index])
+        elif self.split == "val":
+            return self.load_raw(self.i_val[index])
         elif self.split == "video":
             return self.load_raw(index)
     def __len__(self):
         if self.split == "train":
             return len(self.i_train)
+        elif self.split == "val":
+            return len(self.i_val)
         elif self.split == "test":
             return len(self.i_test)
         elif self.split == "video":
@@ -174,8 +205,15 @@ class Load_hyper_data(Dataset):
             mask = None
 
         
+        depth = None
+        if self.load_depth_prior and self.split == "train":
+            # priors enter the loss for training frames only
+            depth = torch.from_numpy(np.load(self.all_depth[idx]).astype(np.float32))
+            if tuple(depth.shape) != (h, w):
+                raise ValueError(f"depth prior {self.all_depth[idx]} has shape {tuple(depth.shape)}, image is {(h, w)}")
         caminfo = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=w, height=h, time=time, mask=mask
+                              image_path=image_path, image_name=image_name, width=w, height=h, time=time, mask=mask,
+                              depth=depth
                               )
         self.map[idx] = caminfo
         return caminfo  

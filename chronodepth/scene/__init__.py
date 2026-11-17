@@ -41,6 +41,7 @@ class Scene:
 
         self.train_cameras = {}
         self.test_cameras = {}
+        self.val_camera = None
         self.video_cameras = {}
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval, args.llffhold)
@@ -53,7 +54,15 @@ class Scene:
             scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval)
             dataset_type="dynerf"
         elif os.path.exists(os.path.join(args.source_path,"dataset.json")):
-            scene_info = sceneLoadTypeCallbacks["nerfies"](args.source_path, False, args.eval)
+            val_holdout = getattr(args, "val_holdout", 0) or 0
+            scene_info = sceneLoadTypeCallbacks["nerfies"](args.source_path, False, args.eval,
+                                                           train_every=getattr(args, "train_every", 1) or 1,
+                                                           val_holdout=val_holdout,
+                                                           depth_prior_dir=getattr(args, "depth_prior_dir", "") or None,
+                                                           load_depth_prior=getattr(args, "load_depth_prior", False))
+            if val_holdout > 0:
+                scene_info, val_infos = scene_info
+                self.val_camera = FourDGSdataset(val_infos, args, "nerfies")
             dataset_type="nerfies"
         elif os.path.exists(os.path.join(args.source_path,"train_meta.json")):
             scene_info = sceneLoadTypeCallbacks["PanopticSports"](args.source_path)
@@ -106,5 +115,7 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_camera
+    def getValCameras(self, scale=1.0):
+        return self.val_camera
     def getVideoCameras(self, scale=1.0):
         return self.video_camera
