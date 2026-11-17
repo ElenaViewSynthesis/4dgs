@@ -1,0 +1,37 @@
+[
+ {
+  "name": "b0dbg/americano_base_205090b_blocking_r1",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base",
+  "cuda_blocking": true
+ },
+ {
+  "name": "b0dbg/americano_base_205090b_blocking_r2",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base",
+  "cuda_blocking": true
+ },
+ {
+  "name": "b0dbg/americano_base_205090b_blocking_r3",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base",
+  "cuda_blocking": true
+ },
+ {
+  "name": "b0dbg/americano_base_205090b_blocking_r4",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base",
+  "cuda_blocking": true
+ },
+ {
+  "name": "b0dbg/americano_base_205090b_blocking_r5",
+  "scene": "americano",
+  "config": "arguments/hypernerf/default.py",
+  "code": "base",
+  "cuda_blocking": true
+ }
+]

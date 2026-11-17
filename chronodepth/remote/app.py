@@ -17,6 +17,7 @@ provides WANDB_API_KEY is attached (FDGS_WANDB_SECRET names it).
 import json
 import os
 import subprocess
+import time
 
 import modal
 
@@ -226,6 +227,62 @@ def tests_remote():
 
 
 # ------------------------------------------------------- train + eval
+class GpuMemSampler:
+    """Samples GPU and container memory from outside the training process, so it works
+    for the unmodified baseline too. Writes one CSV row per interval and a summary."""
+
+    def __init__(self, out_dir, interval=2.0):
+        import threading
+        self.csv, self.summary_path, self.interval = f"{out_dir}/gpu_mem.csv", f"{out_dir}/gpu_mem_summary.json", interval
+        self.stop_flag, self.thread = threading.Event(), threading.Thread(target=self._loop, daemon=True)
+        self.peak_used, self.total, self.peak_host, self.samples, self.last = 0, None, 0, 0, None
+
+    @staticmethod
+    def _host_bytes():
+        for path in ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+            try:
+                with open(path) as f:
+                    return int(f.read().strip())
+            except Exception:
+                pass
+        return -1
+
+    def _loop(self):
+        t0 = time.time()
+        with open(self.csv, "w") as f:
+            f.write("seconds,gpu_used_mib,gpu_total_mib,gpu_util_pct,container_mem_mib\n")
+            while not self.stop_flag.is_set():
+                try:
+                    q = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+                                        "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
+                    used, total, util = [int(float(x)) for x in q.stdout.strip().splitlines()[0].split(",")]
+                    host = self._host_bytes()
+                    host_mib = host // (1024 * 1024) if host >= 0 else -1
+                    self.peak_used, self.total = max(self.peak_used, used), total
+                    self.peak_host, self.samples = max(self.peak_host, host_mib), self.samples + 1
+                    self.last = {"seconds": round(time.time() - t0, 1), "gpu_used_mib": used, "container_mem_mib": host_mib}
+                    f.write(f"{time.time() - t0:.1f},{used},{total},{util},{host_mib}\n")
+                    f.flush()
+                except Exception:
+                    pass
+                self.stop_flag.wait(self.interval)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self.stop_flag.set()
+        self.thread.join(timeout=15)
+        summary = {"peak_gpu_used_mib": self.peak_used, "gpu_total_mib": self.total,
+                   "peak_container_mem_mib": self.peak_host, "samples": self.samples,
+                   "interval_seconds": self.interval, "last_sample": self.last,
+                   "note": "nvidia-smi memory.used for the whole GPU (includes the PyTorch cache), sampled externally"}
+        with open(self.summary_path, "w") as f:
+            json.dump(summary, f, indent=1)
+        return summary
+
+
 @app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=8 * 3600, cpu=8, memory=49152,
               secrets=secrets)
 def run_remote(spec: dict):
@@ -244,12 +301,15 @@ def run_remote(spec: dict):
         return status
     sh(f"rm -rf {out} && mkdir -p {out}")
     env = {"GIT_COMMIT": spec.get("commit", "unknown"), "WANDB_SILENT": "true", "WANDB_PROJECT": WANDB_PROJECT}
+    if spec.get("cuda_blocking"):
+        env["CUDA_LAUNCH_BLOCKING"] = "1"     # debugging: CUDA errors are raised at the call that failed
     if spec.get("no_run_logging"):
         env["FDGS_NO_RUN_LOGGING"] = "1"
     if spec.get("no_wandb"):
         env["WANDB_API_KEY"] = ""          # tracking off for this run (local files only)
     seed = "" if spec.get("seed") is None or spec.get("code") == "base" else f"--seed {spec['seed']}"
     cfg = spec["config"]
+    sampler = GpuMemSampler(out).start()
     try:
         sh(f"{PY37} train.py -s {sdir}/ --port 6017 --expname {spec['name']} --model_path {out} "
            f"--configs {cfg} {seed} {spec.get('extra_args', '')}", cwd=code_dir, env=env, log=f"{out}/train_stdout.txt")
@@ -259,6 +319,7 @@ def run_remote(spec: dict):
         status["status"] = "ok" if os.path.exists(f"{out}/results.json") else "failed"
     except Exception as e:
         status["error"] = str(e)[:500]
+    status["gpu_mem"] = sampler.stop()
     with open(f"{out}/git_commit_launch.txt", "w") as f:
         f.write(f"{spec.get('commit', 'unknown')} code={spec.get('code', 'branch')}\n")
     volume.commit()
