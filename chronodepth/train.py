@@ -59,6 +59,21 @@ try:
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+class ConsecutivePairs(torch.utils.data.Dataset):
+    """Pairs (t, t+1) of consecutive frames of the SAME camera, for L_temp with the dataloader branch."""
+    def __init__(self, cameras):
+        self.cameras = cameras
+        names = cameras.dataset.image_cams
+        self.starts = [i for i in range(len(names) - 1) if names[i] == names[i + 1]]
+    def __len__(self):
+        return len(self.starts)
+    def __getitem__(self, k):
+        i = self.starts[k]
+        return [self.cameras[i], self.cameras[i + 1]]
+
+def flatten_pairs(batch):
+    return [cam for pair in batch for cam in pair]
+
 def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations, 
                          checkpoint_iterations, checkpoint, debug_from,
                          gaussians, scene, stage, tb_writer, train_iter,timer, dp=None, run=None):
@@ -67,8 +82,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     depth_on = dp is not None and dp.depth_loss != "none" and (dp.lambda_depth > 0 or dp.lambda_depth_end > 0)
     temp_on = dp is not None and dp.lambda_temp > 0 and stage == "fine"
     need_aux = depth_on or temp_on
-    if temp_on and opt.dataloader:
-        raise NotImplementedError("L_temp pair sampling is not implemented for the dataloader branch")
     k_total = opt.coarse_iterations + opt.iterations
     k_offset = opt.coarse_iterations if stage == "fine" else 0
 
@@ -119,6 +132,14 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             random_loader = False
         else:
             viewpoint_stack_loader = DataLoader(viewpoint_stack, batch_size=batch_size,shuffle=True,num_workers=16,collate_fn=list)
+            random_loader = True
+        if temp_on:
+            # L_temp needs both frames of a pair in the same iteration: batches of batch_size // 2
+            # consecutive same-camera pairs replace the random batch (same number of images).
+            if not hasattr(getattr(viewpoint_stack, "dataset", None), "image_cams"):
+                raise NotImplementedError("L_temp pair sampling with the dataloader needs a DyNeRF scene")
+            viewpoint_stack_loader = DataLoader(ConsecutivePairs(viewpoint_stack), batch_size=max(batch_size // 2, 1),
+                                                shuffle=True, num_workers=16, collate_fn=flatten_pairs)
             random_loader = True
         loader = iter(viewpoint_stack_loader)
     
@@ -267,10 +288,12 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             masks = [dl.omega_mask(a, dp.omega_thresh, p, t) for a, p, t in zip(aux_alphas, aux_priors, targets)]
             n_frames = len(targets)
             if dp.align == "per_camera":
-                # one (s, b) per camera from running statistics; HyperNeRF has a single camera (key 0)
-                for p, t, m in zip(aux_priors, targets, masks):
-                    run.aligner.update(0, p, t, m)
-                fits = [run.aligner.solve(0)] * n_frames
+                # one (s, b) per camera from running statistics; HyperNeRF has a single camera (key 0),
+                # multi-camera scenes are keyed by the camera name
+                keys = [getattr(c, "cam_key", 0) for c in viewpoint_cams]
+                for key, p, t, m in zip(keys, aux_priors, targets, masks):
+                    run.aligner.update(key, p, t, m)
+                fits = [run.aligner.solve(key) for key in keys]
             else:
                 fits = [dl.align_per_frame(p, t, m) for p, t, m in zip(aux_priors, targets, masks)]
 
@@ -419,10 +442,17 @@ def setup_run(dataset, opt, dp):
     run.uses_prior = dp.depth_loss != "none" or dp.lambda_temp > 0
     run.aligner = dl.AffineAligner(dp.align_stats, dp.align_ema_decay)
     run.prior_space, run.prior_sign, larger_is = "depth", 1.0, "farther"
-    prior_dir = dataset.depth_prior_dir or os.path.join(dataset.source_path, "depth", "2x")
+    multi_camera = os.path.exists(os.path.join(dataset.source_path, "poses_bounds.npy"))      # DyNeRF layout
+    prior_dir = dataset.depth_prior_dir or (os.path.join(dataset.source_path, "depth_chronodepth") if multi_camera
+                                            else os.path.join(dataset.source_path, "depth", "2x"))
     if run.uses_prior:
         settings = {}
         settings_file = os.path.join(prior_dir, "chronodepth_settings.json")
+        if multi_camera and not os.path.exists(settings_file):
+            # one settings file per camera, written with identical settings; read the first
+            import glob
+            per_camera = sorted(glob.glob(os.path.join(prior_dir, "*", "chronodepth_settings.json")))
+            settings_file = per_camera[0] if per_camera else settings_file
         if os.path.exists(settings_file):
             with open(settings_file) as f:
                 settings = json.load(f)
@@ -456,6 +486,8 @@ def finish_run(run, scene, gaussians, pipe, dataset, timer):
                "final_gaussians": int(gaussians.get_xyz.shape[0]),
                "align_final_stats": run.aligner.state_dict(),
                "prior_space": run.prior_space if run.uses_prior else ""}
+    summary["align_final_per_camera"] = {
+        str(k): dict(zip(("s", "b", "ok"), run.aligner.solve(k))) for k in sorted(run.aligner.stats, key=str)}
     if 0 in run.aligner.stats:
         s, b, ok = run.aligner.solve(0)
         summary.update({"align_final_s": s, "align_final_b": b, "align_final_ok": ok})

@@ -446,7 +446,7 @@ def add_points(pointsclouds, xyz_min, xyz_max):
     return pointsclouds
     # breakpoint()
     # new_
-def readdynerfInfo(datadir,use_bg_points,eval, exclude_cams=()):
+def readdynerfInfo(datadir,use_bg_points,eval, exclude_cams=(), depth_prior_dir=None, load_depth_prior=False):
     # loading all the data follow hexplane format
     # ply_path = os.path.join(datadir, "points3D_dense.ply")
     ply_path = os.path.join(datadir, "points3D_downsample2.ply")
@@ -460,6 +460,8 @@ def readdynerfInfo(datadir,use_bg_points,eval, exclude_cams=()):
     scene_bbox_max=[2.5, 2.0, 1.0],
     eval_index=0,   #HERE
     exclude_cams=exclude_cams,
+    depth_prior_dir=depth_prior_dir,
+    load_depth_prior=load_depth_prior,
         )    
     test_dataset = Neural3D_NDC_Dataset(
     datadir,

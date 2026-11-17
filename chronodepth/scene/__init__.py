@@ -53,7 +53,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "poses_bounds.npy")):
             exclude_cams = [c.strip() for c in (getattr(args, "exclude_cams", "") or "").split(",") if c.strip()]
             scene_info = sceneLoadTypeCallbacks["dynerf"](args.source_path, args.white_background, args.eval,
-                                                         exclude_cams=exclude_cams)
+                                                         exclude_cams=exclude_cams,
+                                                         depth_prior_dir=getattr(args, "depth_prior_dir", "") or None,
+                                                         load_depth_prior=getattr(args, "load_depth_prior", False))
             dataset_type="dynerf"
             train_set = scene_info.train_cameras
             cam_report = {"cameras_on_disk": train_set.cams_on_disk, "test_camera": train_set.test_cam,

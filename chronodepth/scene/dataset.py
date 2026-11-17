@@ -38,9 +38,16 @@ class FourDGSdataset(Dataset):
     
                 mask = caminfo.mask
                 depth = getattr(caminfo, "depth", None)
-            return Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,image=image,gt_alpha_mask=None,
+            cam = Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,image=image,gt_alpha_mask=None,
                               image_name=f"{index}",uid=index,data_device=torch.device("cuda"),time=time,
                               mask=mask, depth=depth)
+            # multi-camera (DyNeRF) scenes: the camera name keys the per-camera depth alignment
+            image_cams = getattr(self.dataset, "image_cams", None)
+            if image_cams:
+                cam.cam_key = image_cams[index]
+                if getattr(self.dataset, "load_depth_prior", False):
+                    cam.depth = self.dataset.load_depth(index)
+            return cam
         else:
             return self.dataset[index]
     def __len__(self):

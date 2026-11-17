@@ -225,7 +225,12 @@ class Neural3D_NDC_Dataset(Dataset):
         eval_index=0,
         sphere_scale=1.0,
         exclude_cams=(),
+        depth_prior_dir=None,
+        load_depth_prior=False,
     ):
+        # video-depth priors: <depth_prior_dir>/<camera>/<frame>.npy, read for the training split only
+        self.depth_prior_dir = depth_prior_dir or os.path.join(datadir, "depth_chronodepth")
+        self.load_depth_prior = bool(load_depth_prior) and split == "train"
         # cameras left out of the training split only; () keeps the loader unchanged
         self.exclude_cams = [c for c in exclude_cams if c]
         self.img_wh = (
@@ -310,6 +315,11 @@ class Neural3D_NDC_Dataset(Dataset):
         self.image_paths, self.image_poses, self.image_times, N_cam, N_time = self.load_images_path(videos, self.split)
         self.cam_number = N_cam
         self.time_number = N_time
+        if self.load_depth_prior:
+            missing = [p for p in (self.depth_path(i) for i in range(len(self.image_paths))) if not os.path.exists(p)]
+            if missing:
+                raise FileNotFoundError("{} of {} depth priors are missing, e.g. {}".format(
+                    len(missing), len(self.image_paths), missing[:3]))
     def get_val_pose(self):
         render_poses = self.val_poses
         render_times = torch.linspace(0.0, 1.0, render_poses.shape[0]) * 2.0 - 1.0
@@ -390,6 +400,17 @@ class Neural3D_NDC_Dataset(Dataset):
 
         img = self.transform(img)
         return img, self.image_poses[index], self.image_times[index]
+    def depth_path(self, index):
+        stem = os.path.splitext(os.path.basename(self.image_paths[index]))[0]
+        return os.path.join(self.depth_prior_dir, self.image_cams[index], stem + ".npy")
+    def load_depth(self, index):
+        """Prior of one training image as a float32 (H, W) tensor at the image resolution."""
+        depth = torch.from_numpy(np.load(self.depth_path(index)).astype(np.float32))
+        W, H = self.img_wh
+        if tuple(depth.shape) != (H, W):
+            depth = torch.nn.functional.interpolate(depth[None, None], size=(H, W), mode="bilinear",
+                                                    align_corners=False)[0, 0]
+        return depth
     def load_pose(self,index):
         return self.image_poses[index]
 
