@@ -68,27 +68,49 @@ def main():
         bg = torch.zeros(3, device="cuda")
         picks = np.linspace(0, len(train) - 1, min(args.n_frames, len(train))).round().astype(int)
         per_frame, pool_d, pool_z = [], [], []
+        multi_camera = hasattr(data, "image_cams")       # DyNeRF: priors are <prior_dir>/<camera>/<frame>.npy
+        if multi_camera:
+            data.depth_prior_dir = args.prior_dir
+        cam_pool = {}
         for idx in picks:
             cam = train[int(idx)]
             pkg = render(cam, gaussians, pipeline.extract(args), bg, stage="fine", cam_type=scene.dataset_type,
                          return_depth_alpha=True)
             alpha = pkg["alpha"]
             mask = alpha > args.omega_thresh
-            frame_id = data.all_img_origin[int(data.i_train[int(idx)])]
-            prior = torch.from_numpy(np.load(os.path.join(args.prior_dir, frame_id + ".npy"))).cuda()
+            if multi_camera:
+                cam_name = data.image_cams[int(idx)]
+                frame_id = cam_name + "/" + os.path.splitext(os.path.basename(data.image_paths[int(idx)]))[0]
+                prior = data.load_depth(int(idx)).cuda()
+            else:
+                cam_name = "0"
+                frame_id = data.all_img_origin[int(data.i_train[int(idx)])]
+                prior = torch.from_numpy(np.load(os.path.join(args.prior_dir, frame_id + ".npy"))).cuda()
             if int(mask.sum()) < 1000:
                 continue
             z = (pkg["depth_diff"] / alpha.clamp_min(1e-6))[mask]
             d = prior[mask]
             fz, fi = fit(d, z), fit(d, 1.0 / z)
-            per_frame.append({"frame_id": frame_id, "omega_frac": float(mask.float().mean()),
+            per_frame.append({"frame_id": frame_id, "camera": cam_name, "omega_frac": float(mask.float().mean()),
                               "depth": {"s": fz[0], "b": fz[1], "r": fz[2], "rel_l1": fz[3]},
                               "inverse_depth": {"s": fi[0], "b": fi[1], "r": fi[2], "rel_l1": fi[3]}})
             keep = torch.arange(0, d.numel(), 16, device=d.device)      # deterministic subsample for pooling
             pool_d.append(d[keep])
             pool_z.append(z[keep])
+            cam_pool.setdefault(cam_name, ([], []))
+            cam_pool[cam_name][0].append(d[keep])
+            cam_pool[cam_name][1].append(z[keep])
         d_all, z_all = torch.cat(pool_d), torch.cat(pool_z)
         pz, pi = fit(d_all, z_all), fit(d_all, 1.0 / z_all)
+
+        # one (s, b) per camera over that camera's sampled frames: the assumption of Eq. (align)
+        per_camera = {}
+        for name, (ds, zs) in sorted(cam_pool.items()):
+            dc, zc = torch.cat(ds), torch.cat(zs)
+            cz, ci = fit(dc, zc), fit(dc, 1.0 / zc)
+            per_camera[name] = {"frames": len(ds),
+                                "depth": {"s": cz[0], "b": cz[1], "r": cz[2], "rel_l1": cz[3]},
+                                "inverse_depth": {"s": ci[0], "b": ci[1], "r": ci[2], "rel_l1": ci[3]}}
 
     med = lambda key, k: float(np.median([f[key][k] for f in per_frame]))
     out = {
@@ -106,13 +128,26 @@ def main():
             "inverse_depth_s_min_max": [min(f["inverse_depth"]["s"] for f in per_frame),
                                         max(f["inverse_depth"]["s"] for f in per_frame)]},
         "per_frame": per_frame,
+        "per_camera_single_scale_shift": per_camera,
+        "cameras_where_depth_fits_better": sum(abs(c["depth"]["r"]) >= abs(c["inverse_depth"]["r"]) for c in per_camera.values()),
+        "cameras": len(per_camera),
+        "frames_where_depth_fits_better": sum(abs(f["depth"]["r"]) >= abs(f["inverse_depth"]["r"]) for f in per_frame),
     }
+    if multi_camera:
+        out["note"] = ("multi-camera scene: 'pooled_single_scale_shift' pools ALL cameras with one (s, b), which the "
+                       "method does not assume; the per-camera fits are the relevant ones")
     better = "depth" if abs(pz[2]) >= abs(pi[2]) else "disparity"
+    if multi_camera:      # decide on the per-camera fits, by median |r|
+        mz = float(np.median([abs(c["depth"]["r"]) for c in per_camera.values()]))
+        mi = float(np.median([abs(c["inverse_depth"]["r"]) for c in per_camera.values()]))
+        out["per_camera_median_abs_r"] = {"depth": mz, "inverse_depth": mi}
+        better = "depth" if mz >= mi else "disparity"
     out["better_pooled_space"] = better
     out["larger_is"] = "farther" if pz[2] > 0 else "nearer"
     with open(os.path.join(args.prior_dir, "prior_space_check.json"), "w") as f:
         json.dump(out, f, indent=1)
-    print(json.dumps({k: out[k] for k in ("pooled_single_scale_shift", "per_frame_median",
+    print(json.dumps({k: out[k] for k in ("cameras_where_depth_fits_better", "cameras", "frames_where_depth_fits_better",
+                                           "pooled_single_scale_shift", "per_frame_median",
                                            "per_frame_scale_spread", "better_pooled_space", "larger_is")}, indent=1))
 
 

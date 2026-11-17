@@ -429,13 +429,14 @@ def dynerf_pipeline_remote(scene: str, camera: str, spec: dict):
 
 
 @app.function(image=train_image, volumes={VOL: volume}, gpu=GPU, timeout=3600, memory=32768)
-def space_remote(scene: str, run_name: str, config: str):
+def space_remote(scene: str, run_name: str, config: str, n_frames: int = 32):
     """Dense depth-vs-disparity check of the prior against a trained baseline model."""
     sdir = scene_dir(scene)
+    prior_dir = f"{sdir}/depth_chronodepth" if scene in DYNERF_SCENES else f"{sdir}/depth/2x"
     sh(f"{PY37} scripts/check_prior_space.py --model_path {VOL}/output/{run_name} --configs {config} "
-       f"--prior_dir {sdir}/depth/2x", cwd="/root/4dgs")
+       f"--prior_dir {prior_dir} --n_frames {n_frames}", cwd="/root/4dgs")
     volume.commit()
-    with open(f"{sdir}/depth/2x/prior_space_check.json") as f:
+    with open(f"{prior_dir}/prior_space_check.json") as f:
         out = json.load(f)
     out.pop("per_frame", None)
     return out

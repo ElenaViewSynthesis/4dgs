@@ -76,7 +76,7 @@ def main():
     elif cmd == "stability":
         record("stability", args[0], fn("stability_remote").spawn(args[0]))
     elif cmd == "space":          # space <scene> <baseline run name> <config>
-        record("space", args[0], fn("space_remote").spawn(args[0], args[1], args[2]))
+        record("space", args[0], fn("space_remote").spawn(args[0], args[1], args[2], int(args[3]) if len(args) > 3 else 32))
     elif cmd == "diagnostics":    # diagnostics <run name> <baseline run name> <config>
         record("diagnostics", args[0], fn("diagnostics_remote").spawn(args[0], args[1], args[2]))
     elif cmd == "tests":
