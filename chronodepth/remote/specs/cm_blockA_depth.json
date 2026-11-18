@@ -1,0 +1,23 @@
+[
+ {
+  "name": "cm/depth_full",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_depth_full.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/depth_sparse2",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_depth_sparse2.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/depth_sparse5",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_depth_sparse5.py",
+  "code": "branch",
+  "seed": null
+ }
+]

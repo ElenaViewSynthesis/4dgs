@@ -1,0 +1,4 @@
+[
+ {"name": "cm/base_sparse2", "scene": "coffee_martini", "config": "arguments/dynerf/exp/cm_base_sparse2.py", "code": "branch", "seed": null},
+ {"name": "cm/base_sparse5", "scene": "coffee_martini", "config": "arguments/dynerf/exp/cm_base_sparse5.py", "code": "branch", "seed": null}
+]

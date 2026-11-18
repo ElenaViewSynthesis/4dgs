@@ -1,0 +1,3 @@
+[
+ {"name": "smoke/coffee_martini_depth", "scene": "coffee_martini", "config": "arguments/dynerf/exp/cm_smoke_depth.py", "code": "branch", "seed": null, "no_wandb": true, "force": true}
+]
