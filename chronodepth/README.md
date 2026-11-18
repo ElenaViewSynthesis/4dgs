@@ -7,13 +7,13 @@ output of a temporally consistent video-depth estimator,
 
 The original 4DGaussians README is kept unchanged as [`README_4DGaussians.md`](README_4DGaussians.md).
 
-> **Status, 17 November 2026.** The regulariser is implemented and unit-tested. Depth priors exist for
-> both scenes. **No regularised experiment has been run.** The check that the baseline is unchanged
-> when every new flag is off (B0) has been run 23 times and **does not pass as worded: the unmodified
-> baseline itself is unstable on *americano*** (section 10). Its crashes are not memory exhaustion.
-> The dense check says the priors are affine in depth (section 7). One unregularised run and one
-> ChronoDepth video exist for the DyNeRF scene *coffee martini* (section 10). Nothing in this file is
-> a claim that the regulariser helps.
+> **Status, 18 November 2026.** The regulariser is implemented and unit-tested, for single-camera
+> (HyperNeRF) and multi-camera (DyNeRF) scenes. On *americano* the check that the baseline is
+> unchanged with every flag off (B0) **does not pass as worded: the unmodified baseline itself is
+> unstable** (section 10), so no regularised run was made there. On the DyNeRF scene *coffee martini*
+> a reduced experiment was run: 6 runs over three camera settings and a 5-run sensitivity sweep, one
+> seed each (section 10). **The regulariser shows no measurable improvement; λ_d = 1.0 is clearly
+> harmful.** Nothing in this file is a claim that the regulariser helps.
 
 ---
 
@@ -188,9 +188,17 @@ All default to "off". A config file can set them in a `DepthParams = dict(...)` 
 | `--depth_prior_dir` | `""` | folder of `{frame_id}.npy`; empty means `<source_path>/depth/2x` |
 | `--train_every` | `1` | keep every N-th training frame (sparse-view experiments) |
 | `--val_holdout` | `0` | N > 0 holds out every N-th training frame as a validation set |
+| `--exclude_cams` | `""` | multi-camera (DyNeRF) scenes: comma-separated cameras left out of the **training** set, e.g. `cam11,cam19` |
 | `--seed` | `-1` | seeds Python, NumPy and PyTorch; below 0 keeps the seeding of `205090b` |
 
 The test split never changes: it is computed before `--train_every` and `--val_holdout` are applied.
+
+`--exclude_cams` never removes the test camera and leaves the poses and the initial point cloud as
+computed from all cameras. It stops with the list of cameras on disk if a named camera does not
+exist, and every DyNeRF run writes `train_cameras.json` (on disk, excluded, used). For DyNeRF scenes
+the priors are read from `<source_path>/depth_chronodepth/<camera>/<frame>.npy`, the alignment keeps
+one `(s_c, b_c)` per camera, and with `lambda_temp > 0` batches are pairs of consecutive frames of
+the same camera.
 
 ---
 
@@ -267,6 +275,24 @@ than read with `auto`. Two cautions: the reference is a model's own geometry, no
 the margin is moderate. And when each frame is fitted separately the scale ranges from 15.4 to 54.0
 over the sequence, so a single scale and shift per camera does not fit this sequence closely; that is
 what ablation (e) of E2 tests. The check has not been run on *aleks-teapot*.
+
+**The same check on *coffee martini* gives the opposite answer.** 68 training frames (four per
+camera), reference `dynerf/coffee_martini_branch_flags_off`, at least 97.3% of pixels in Ω per frame.
+
+| Fit, per frame | Against depth | Against inverse depth |
+|---|---|---|
+| Median Pearson r, all pixels of Ω | +0.31 | −0.66 |
+| Median Pearson r, farthest 10% of pixels removed | +0.48 | −0.69 |
+| Median relative L1 residual, farthest 10% removed | 0.611 | 0.543 |
+| Frames where this space fits better | 0 of 68 | 68 of 68 |
+| Cameras where this space fits better (one fit per camera) | 0 of 17 | 17 of 17 |
+
+On *americano* the two fits are close (0.864 against 0.824), as expected when the depth range is
+narrow and depth and inverse depth are nearly proportional. *Coffee martini* spans depths from about
+9 to 300 scene units (median 2nd and 100th percentiles over frames: 8.8 and 313.7), where the two
+differ sharply, so it is the more discriminating test. **All *coffee martini* runs therefore use
+`depth_prior_space='disparity'`.** Larger still means farther on both scenes. Neither fit is tight,
+and the reference is a model's own geometry, not ground truth.
 
 Both spaces are implemented: with `--depth_prior_space disparity` every term uses the
 alpha-normalised inverse rendered depth `A / D̂` in place of `D̂`.
@@ -447,32 +473,116 @@ above.
 - **The instability again.** Two of these five baseline runs are healthy. Over all 13 baseline runs
   (8 normal, 5 blocking): 7 healthy, 2 degraded, 2 collapsed, 2 crashed.
 
-### DyNeRF check: *coffee martini*
+### DyNeRF experiment: *coffee martini*
 
-One multi-camera scene from the Neural 3D Video dataset, run to obtain a ChronoDepth video and the
-Gaussian splats of an unregularised model side by side in W&B. **The depth maps are not used in
-training**: the depth loss is wired up for the HyperNeRF loader only.
+18 cameras of 300 frames at 1352×1014; `cam00` is the test view, so 17 cameras are available for
+training. ChronoDepth was run on every camera separately (F = 10, overlap 5, 5 denoising steps, seed
+1234, inference at 1024×768). All runs: `arguments/dynerf/coffee_martini.py`, 14,000 iterations
+(3,000 coarse), batch size 4 (recorded in each `resolved_config.json`), default seeding, one A100-40GB.
+**Every cell below is a single run. No seed spread was measured on this scene.**
 
-| Stage | Result |
-|---|---|
-| Preprocessing (baseline steps: `preprocess_dynerf.py`, `colmap.sh <dir> llff`, `downsample_point.py`) | 18 cameras, 300 frames each; 318,712 fused points |
-| ChronoDepth on `cam00` (the held-out test view) | 300 frames, inference at 1024×768, output 1352×1014, F = 10, overlap 5, 5 denoising steps, seed 1234, 247 s |
-| Training, branch with every flag off, `arguments/dynerf/coffee_martini.py`, 14,000 iterations | one run, no NaN restart, no CUDA error |
+The task that defined the camera settings named cam23, cam03, cam15, cam17 and cam22, which do not
+exist in this scene (cameras on disk: cam00–02, 04–14, 16, 18–20). The lists below replace them.
 
-| PSNR | SSIM | MS-SSIM | D-SSIM | LPIPS-VGG | LPIPS-Alex | Final Gaussians | Test render FPS | Training time | Peak GPU memory |
-|---|---|---|---|---|---|---|---|---|---|
-| 28.5781 | 0.9075 | 0.9547 | 0.0227 | 0.1628 | 0.0817 | 124,147 | 9.98 | 3,827 s | 21,027 MiB |
+**Regularised configuration ("+ depth")**, fixed in advance and not tuned: `l1_aligned`, λ_d = 0.1
+constant, λ_t = 0.1, Ω threshold 0.9, one `(s_c, b_c)` per camera with cumulative statistics, aligned
+in inverse depth (section 7). Nothing was selected on test metrics.
 
-Test view `cam00` (300 frames); training on the other 17 cameras (5,100 images). Training-time test
-PSNR rose monotonically (27.51, 27.72, 28.25 dB at the three fine-stage evaluations), so this run
-shows no sign of the collapse seen on *americano*. It is a single run: nothing is known about its
-run-to-run spread, and it has not been compared with the unmodified baseline, which cannot load
-DyNeRF scenes at all (finding 10, section 12).
+#### Block A: three camera settings
 
-In W&B: `chronodepth-prior/coffee_martini/cam00` holds the depth video and previews;
-`dynerf/coffee_martini_branch_flags_off` holds the splat statistics and point clouds (fine
-iterations 3,500, 7,000, 10,500 and 14,000). An empty failed run of the same name is the attempt
-that hit finding 10.
+| Setting | Cameras ignored | Train cams | Method | PSNR | SSIM | MS-SSIM | D-SSIM | LPIPS-VGG | LPIPS-Alex | Gaussians | Train time | Run |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| full | none | 17 | baseline | 28.5781 | 0.9075 | 0.9547 | 0.0227 | 0.1628 | 0.0817 | 124,147 | 3,827 s | `dynerf/coffee_martini_branch_flags_off` |
+| full | none | 17 | + depth | 28.4862 | 0.9078 | 0.9537 | 0.0232 | 0.1623 | 0.0807 | 184,023 | 6,091 s | `cm/depth_full` |
+| sparse 2 | cam11, cam19 | 15 | baseline | 28.0745 | 0.9089 | 0.9533 | 0.0234 | 0.1612 | 0.0809 | 121,184 | 3,596 s | `cm/base_sparse2` |
+| sparse 2 | cam11, cam19 | 15 | + depth | 28.4389 | 0.9055 | 0.9530 | 0.0235 | 0.1624 | 0.0802 | 184,686 | 5,966 s | `cm/depth_sparse2` |
+| sparse 5 | cam04, cam09, cam10, cam13, cam20 | 12 | baseline | 28.0616 | 0.9064 | 0.9527 | 0.0237 | 0.1617 | 0.0803 | 118,098 | 3,656 s | `cm/base_sparse5` |
+| sparse 5 | cam04, cam09, cam10, cam13, cam20 | 12 | + depth | 27.9416 | 0.9070 | 0.9509 | 0.0246 | 0.1595 | 0.0805 | 166,194 | 6,304 s | `cm/depth_sparse5` |
+
+- **No consistent effect.** PSNR changes by −0.09 dB (full), +0.36 dB (sparse 2) and −0.12 dB
+  (sparse 5); the other metrics move by small amounts in mixed directions.
+- **No claim can be made from single runs.** See the noise estimate under the sweep below.
+- **Cost.** The regularised runs end with 41–52% more Gaussians and take 59–72% longer to train.
+- **The settings are mild.** Removing two or five of 17 cameras costs the baseline about 0.5 dB, and
+  sparse 5 is no worse than sparse 2.
+- All six runs finished with no NaN restart and no CUDA error; none showed the collapse seen on
+  *americano*. The full baseline was trained at an earlier commit (`7b2be34`) than the others, before
+  `--exclude_cams` existed; the flag is empty for that setting.
+
+#### Sensitivity sweep (blocks B1, C, D1), full setting
+
+One value changed at a time around the regularised configuration.
+
+| Block | Varied | λ_d | λ_t | Ω threshold | PSNR | SSIM | MS-SSIM | D-SSIM | LPIPS-VGG | LPIPS-Alex | Gaussians | Train time |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| — | baseline | 0 | 0 | — | 28.5781 | 0.9075 | 0.9547 | 0.0227 | 0.1628 | 0.0817 | 124,147 | 3,827 s |
+| A | centre | 0.1 | 0.1 | 0.9 | 28.4862 | 0.9078 | 0.9537 | 0.0232 | 0.1623 | 0.0807 | 184,023 | 6,091 s |
+| B1 | λ_d | 0.01 | 0.1 | 0.9 | 28.6149 | 0.9071 | 0.9545 | 0.0227 | 0.1615 | 0.0804 | 181,585 | 5,945 s |
+| B1 | λ_d | 1 | 0.1 | 0.9 | 27.4065 | 0.8988 | 0.9465 | 0.0267 | 0.1734 | 0.0893 | 166,586 | 6,708 s |
+| C | Ω threshold | 0.1 | 0.1 | 0.5 | 27.9886 | 0.9064 | 0.9519 | 0.0241 | 0.1607 | 0.0802 | 175,752 | 6,178 s |
+| C | Ω threshold | 0.1 | 0.1 | 0.99 | 28.5246 | 0.9050 | 0.9521 | 0.0240 | 0.1644 | 0.0827 | 179,852 | 6,058 s |
+| D1 | λ_t | 0.1 | 0 | 0.9 | 28.4947 | 0.9087 | 0.9547 | 0.0226 | 0.1609 | 0.0819 | 120,835 | 5,914 s |
+
+- **λ_d = 1.0 hurts**: −1.17 dB against the baseline, worse on every metric and on all 300 test
+  frames. The depth term is then 17.6% of the photometric L1 loss at the end of training (last 500
+  iterations), against 6.0% at λ_d = 0.1 and 1.0% at λ_d = 0.01.
+- **λ_d = 0.01 and 0.1 are indistinguishable from the baseline** (+0.04 and −0.09 dB).
+- **Noise is probably about 0.5 dB.** Ω thresholds 0.5 and 0.9 select almost the same pixels (99.8%
+  and 98.6% of pixels in Ω), yet the two runs differ by 0.50 dB. The likely reading is run-to-run
+  variation, not an effect of Ω. If so, only the λ_d = 1.0 result stands, and the +0.36 dB at sparse 2
+  is inside the noise. This is an inference from one pair of runs; repeat seeds were not run.
+- **The temporal term does not change quality at λ_t = 0.1** (0.01 dB between λ_t = 0 and 0.1); its
+  weighted value is about 0.15% of the photometric loss.
+- **Turning the temporal term on inflates the model.** Every run with λ_t = 0.1 ends with
+  166,000–185,000 Gaussians; the λ_t = 0 run ends with 120,835, like the baseline (124,147). With
+  λ_t > 0 each batch is two pairs of consecutive same-camera frames instead of four random images.
+  That change of sampling, rather than the loss, is the suspected cause; the two were not separated.
+  It is a confound for block A, where every "+ depth" run uses λ_t = 0.1.
+- **Training is about 55% longer even with λ_t = 0** (5,914 s against 3,827 s): the second render
+  pass and loading the priors.
+
+Not run: λ_d ∈ {0.03, 0.3}, λ_t ∈ {0.01, 1.0}, the linear-decay schedule, L_corr, per-frame
+alignment, and repeat seeds.
+
+#### Per-camera alignment, full setting (`cm/depth_full`)
+
+All 17 cameras obtained a valid fit. The scale is negative because a larger prior value means
+farther, hence smaller inverse depth. The values for the sparse runs are in each run's
+`train_summary.json` (`align_final_per_camera`).
+
+| Camera | s | b |
+|---|---|---|
+| cam01 | -0.0828 | 0.0949 |
+| cam02 | -0.0742 | 0.0951 |
+| cam04 | -0.0606 | 0.0956 |
+| cam05 | -0.0585 | 0.0956 |
+| cam06 | -0.0541 | 0.0942 |
+| cam07 | -0.0583 | 0.0939 |
+| cam08 | -0.0613 | 0.0946 |
+| cam09 | -0.0640 | 0.0961 |
+| cam10 | -0.0563 | 0.0897 |
+| cam11 | -0.0913 | 0.1222 |
+| cam12 | -0.0755 | 0.1148 |
+| cam13 | -0.0757 | 0.1060 |
+| cam14 | -0.0750 | 0.1073 |
+| cam16 | -0.0672 | 0.1054 |
+| cam18 | -0.0779 | 0.1074 |
+| cam19 | -0.0922 | 0.1200 |
+| cam20 | -0.1027 | 0.1243 |
+
+#### Result files
+
+`results_tables/blockA_table.csv` and `results_tables/sweep_table.csv` hold the two tables above, built from
+each run's `results.json`, `train_summary.json` and `resolved_config.json`. `results_tables/` also holds
+the two prior-space check files and the per-run summary of the *americano* B0 runs.
+
+#### W&B
+
+`chronodepth-prior/coffee_martini/cam16` and `.../cam00` hold a depth video and previews; the other
+cameras' maps were not uploaded. Training runs are `dynerf/coffee_martini_branch_flags_off` (full
+baseline) and `cm/*`, with splat statistics and point clouds at fine iterations 3,500, 7,000, 10,500
+and 14,000.
+
 
 ---
 
@@ -542,6 +652,9 @@ python remote/launch.py prep americano           # download + COLMAP + downsampl
 python remote/launch.py depth americano          # ChronoDepth
 python remote/launch.py runs remote/specs/b0.json
 python remote/launch.py dynerf coffee_martini cam00   # DyNeRF: prep, ChronoDepth on one camera, one run
+python remote/launch.py depthall coffee_martini cam16 # ChronoDepth for every camera; cam16 tracked in W&B
+python remote/launch.py space coffee_martini <baseline run> <config> 68   # prior-space check
+python remote/launch.py runs remote/specs/cm_blockA_depth.json
 python remote/launch.py status
 python remote/launch.py collect results.csv
 ```
@@ -602,7 +715,9 @@ Verified in the code at `205090b`. None of these was changed, so that the baseli
 | 7 | COLMAP 3.8 is built without its GUI in the remote image | Headless containers; the command-line tools are the same |
 | 8 | Remote training runs on an A100 (40 GB), not an RTX A6000 | Availability; timings are comparable only among runs of this project |
 | 9 | One debug print removed from the baseline's DyNeRF loader | Finding 10 above: with it, no DyNeRF scene loads. HyperNeRF runs are unaffected |
-| 10 | For DyNeRF scenes ChronoDepth is run on one camera only and the maps are not read by the loader | The request was a depth video beside the splats; depth supervision for multi-camera scenes is not implemented |
+| 10 | For DyNeRF scenes the prior is aligned in inverse depth, not depth as the alignment equation is written | Section 7: on *coffee martini* inverse depth fits better in every frame and camera |
+| 11 | The planned E1–E3 were replaced by a reduced design on *coffee martini*: fixed hyperparameters, one seed, sparsity by removing cameras | The baseline is unstable on *americano* (finding 9); the 18-run, 3-seed table and the full sweep were not run for cost |
+| 12 | With `lambda_temp > 0` on DyNeRF scenes, batches are pairs of consecutive same-camera frames | `L_temp` needs both frames in the same iteration; it changes batch composition relative to the baseline |
 
 ---
 
