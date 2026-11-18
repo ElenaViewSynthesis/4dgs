@@ -1,0 +1,37 @@
+[
+ {
+  "name": "cm/sweep_ld0p01",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_sweep_ld0p01.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/sweep_ld1p0",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_sweep_ld1p0.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/sweep_om0p5",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_sweep_om0p5.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/sweep_om0p99",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_sweep_om0p99.py",
+  "code": "branch",
+  "seed": null
+ },
+ {
+  "name": "cm/sweep_lt0",
+  "scene": "coffee_martini",
+  "config": "arguments/dynerf/exp/cm_sweep_lt0.py",
+  "code": "branch",
+  "seed": null
+ }
+]
