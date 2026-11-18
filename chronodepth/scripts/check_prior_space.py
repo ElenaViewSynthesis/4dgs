@@ -91,9 +91,17 @@ def main():
             z = (pkg["depth_diff"] / alpha.clamp_min(1e-6))[mask]
             d = prior[mask]
             fz, fi = fit(d, z), fit(d, 1.0 / z)
+            # robustness: the same two fits without the farthest 10% of pixels, where a few
+            # very distant Gaussians can dominate a correlation computed in depth
+            q = torch.quantile(z[::16].float(), torch.tensor([0.02, 0.5, 0.9, 0.98, 1.0], device=z.device))
+            near = z <= q[2]
+            tz, ti = fit(d[near], z[near]), fit(d[near], 1.0 / z[near])
             per_frame.append({"frame_id": frame_id, "camera": cam_name, "omega_frac": float(mask.float().mean()),
                               "depth": {"s": fz[0], "b": fz[1], "r": fz[2], "rel_l1": fz[3]},
-                              "inverse_depth": {"s": fi[0], "b": fi[1], "r": fi[2], "rel_l1": fi[3]}})
+                              "inverse_depth": {"s": fi[0], "b": fi[1], "r": fi[2], "rel_l1": fi[3]},
+                              "z_quantiles_2_50_90_98_100": [float(v) for v in q],
+                              "nearest_90pct": {"depth_r": tz[2], "depth_rel_l1": tz[3],
+                                                "inverse_depth_r": ti[2], "inverse_depth_rel_l1": ti[3]}})
             keep = torch.arange(0, d.numel(), 16, device=d.device)      # deterministic subsample for pooling
             pool_d.append(d[keep])
             pool_z.append(z[keep])
